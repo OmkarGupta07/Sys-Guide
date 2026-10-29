@@ -86,6 +86,7 @@ function home() {
       <div class="eyebrow">System design · LLD · Offline</div>
       <h1>Know when, and why.</h1>
       <p class="lead">One lesson a day, in order. Read the cards, then face real scenarios and an interviewer who asks “why?”.</p>
+      ${installEvt ? '<button class="btn primary" id="install" style="margin-top:18px">Install app</button>' : ''}
     </section>
     ${streakCard(prog)}
     <div class="stats">
@@ -101,7 +102,18 @@ function home() {
     ${weeks.map((w, i) => `<div class="section-title">Week ${i + 1}</div><div class="days">${w.map(row).join('')}</div>`).join('')}
     <p class="small muted" style="margin-top:32px">${read} lessons read so far. <a href="#/syllabus" class="link">See the full syllabus</a></p>
   `);
+  const btn = document.getElementById('install');
+  if (btn) btn.onclick = async () => { installEvt.prompt(); await installEvt.userChoice; installEvt = null; home(); };
 }
+
+// Chrome fires this when the app is installable; we show our own button instead of relying on the menu.
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installEvt = e;
+  if (!location.hash || location.hash === '#/') home();
+});
+window.addEventListener('appinstalled', () => { installEvt = null; });
 
 // Streak = consecutive local calendar days with at least one finished practice round.
 // It stays alive until the end of the day after the last study day.
