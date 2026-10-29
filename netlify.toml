@@ -1,0 +1,5 @@
+# Static site served from the repo root. The "build" only validates content,
+# so a broken lesson fails the deploy instead of reaching the phone.
+[build]
+  publish = "."
+  command = "node tools/check.js"
