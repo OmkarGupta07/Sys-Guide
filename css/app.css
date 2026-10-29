@@ -1,44 +1,26 @@
+/* One theme on purpose: black with a neon green accent, regardless of the phone's light/dark setting. */
 :root {
-  --bg: #F7F5F0;
-  --surface: #FFFFFF;
-  --surface-2: #F1EEE7;
-  --ink: #1B1A17;
-  --ink-2: #5C5A54;
-  --ink-3: #8D8A82;
-  --line: #E4E0D6;
-  --accent: #1F4D3A;
-  --accent-ink: #FFFFFF;
-  --accent-soft: #E3EDE7;
-  --ok: #2E6B47;
-  --ok-soft: #E4F0E8;
-  --bad: #A2412E;
-  --bad-soft: #F7E7E2;
-  --warn: #8A5F10;
-  --warn-soft: #F6EEDB;
+  --bg: #07080A;
+  --surface: #101214;
+  --surface-2: #171A1D;
+  --ink: #F1F5F2;
+  --ink-2: #A4ADA8;
+  --ink-3: #6B746F;
+  --line: #22272A;
+  --accent: #39FF88;
+  --accent-ink: #03140A;
+  --accent-soft: rgba(57, 255, 136, 0.1);
+  --glow: 0 0 18px rgba(57, 255, 136, 0.35);
+  --ok: #39FF88;
+  --ok-soft: rgba(57, 255, 136, 0.1);
+  --bad: #FF5C7A;
+  --bad-soft: rgba(255, 92, 122, 0.1);
+  --warn: #FFC94D;
+  --warn-soft: rgba(255, 201, 77, 0.08);
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Noto Serif", Georgia, serif;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --r: 14px;
-  color-scheme: light dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #121311;
-    --surface: #1A1B19;
-    --surface-2: #22231F;
-    --ink: #ECEAE4;
-    --ink-2: #A9A69E;
-    --ink-3: #7A776F;
-    --line: #2C2D29;
-    --accent: #8FC9A9;
-    --accent-ink: #10201A;
-    --accent-soft: #1D2B24;
-    --ok: #8FC9A9;
-    --ok-soft: #1B2A22;
-    --bad: #E59A88;
-    --bad-soft: #2E1D19;
-    --warn: #E0B868;
-    --warn-soft: #2B2416;
-  }
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -97,7 +79,7 @@ button { font: inherit; color: inherit; }
   transition: transform .08s ease, background .15s ease;
 }
 .btn:active { transform: scale(0.98); }
-.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; box-shadow: var(--glow); }
 .btn.block { width: 100%; }
 .link { background: none; border: 0; padding: 0; color: var(--accent); font-weight: 500; cursor: pointer; font-size: 15px; }
 
@@ -217,7 +199,11 @@ button { font: inherit; color: inherit; }
 @media (max-width: 380px) { .streak { flex-direction: column; align-items: flex-start; } }
 
 /* daily path */
-.tcard.today { border-color: var(--accent); border-width: 1.5px; }
+.tcard.today { border-color: var(--accent); border-width: 1.5px; box-shadow: 0 0 24px rgba(57, 255, 136, 0.12); }
+.tcard.today .pill { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.streak b, .score { text-shadow: var(--glow); }
+.progress i { box-shadow: var(--glow); }
+.drow.now .dnum { box-shadow: var(--glow); }
 .days { display: grid; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 .drow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; text-decoration: none; }
 .drow + .drow { border-top: 1px solid var(--line); }

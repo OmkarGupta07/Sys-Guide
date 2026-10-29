@@ -1,4 +1,4 @@
-// Generates icons/icon-{192,512}.png with no dependencies: green tile, three connected dots.
+// Generates icons/icon-{192,512}.png with no dependencies: black tile, three connected neon dots.
 // Run: node tools/make-icons.js
 const fs = require('fs');
 const zlib = require('zlib');
@@ -18,7 +18,7 @@ const chunk = (type, data) => {
 };
 
 function icon(size) {
-  const bg = [0x1f, 0x4d, 0x3a], fg = [0xf7, 0xf5, 0xf0];
+  const bg = [0x07, 0x08, 0x0a], fg = [0x39, 0xff, 0x88];
   // dots in a "connect the dots" path, coordinates in 0..1 (kept inside the maskable safe zone)
   const dots = [[0.34, 0.36], [0.66, 0.46], [0.40, 0.66]];
   const r = 0.075, w = 0.028;
