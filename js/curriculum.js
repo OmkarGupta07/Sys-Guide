@@ -6,6 +6,7 @@ SG.path = [
   ['transport', 'TCP, UDP and HTTP versions', 'B4 B6 B9'],
   ['oop', 'OOP pillars in Java', 'T1 T5 T6'],
   ['perf-terms', 'Latency, throughput and availability', 'B10 B11 M6 A2'],
+  ['nfr', 'Finding the non-functional requirements', 'A2 J1'],
   ['estimation', 'Back-of-the-envelope estimation', 'C1 C2 C3 C4 C5 C6'],
   ['solid-1', 'SOLID part 1: SRP, OCP, LSP', 'T2'],
   ['solid-2', 'SOLID part 2 and design principles', 'T2 T3 T4'],
