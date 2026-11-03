@@ -1,5 +1,5 @@
 // Bump VERSION whenever any file below changes, so phones pick up the new copy.
-const VERSION = 'sg-v6';
+const VERSION = 'sg-v7';
 const FILES = [
   './', 'index.html', 'css/app.css', 'js/app.js', 'js/curriculum.js', 'SYLLABUS.md', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png',
@@ -9,6 +9,9 @@ const FILES = [
   'js/content/eviction.js', 'js/content/cache-failures.js', 'js/content/structural.js', 'js/content/acid.js',
   'js/content/indexes.js', 'js/content/replication.js', 'js/content/sharding.js', 'js/content/ids-hashing.js',
   'js/content/nfr.js', 'js/content/structural-2.js', 'js/content/cap.js', 'js/content/storage-types.js',
+  'js/content/behavioral-2.js', 'js/content/api-styles.js', 'js/content/api-design.js', 'js/content/di-layers.js',
+  'js/content/async-why.js', 'js/content/delivery.js', 'js/content/concurrency-1.js', 'js/content/events.js',
+  'js/content/resilience.js', 'js/content/concurrency-2.js',
   'js/content/realtime.js', 'js/content/brokers.js', 'js/content/ratelimit.js', 'js/content/cachewrite.js',
   'js/content/dbchoice.js', 'js/content/scaling.js', 'js/content/behavioral.js',
 ];
