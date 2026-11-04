@@ -126,5 +126,27 @@ SG.add({
         { q: 'Reports grow to scanning billions of rows. Next step?', options: ['Move analytics to a warehouse (OLAP) fed by CDC or ETL', 'More replicas forever', 'Bigger primary', 'Run reports less often'], why: 'OLTP replicas aren’t built for big analytics; warehouses are.' },
       ],
     }),
+    () => ({
+      q: 'Two regional leaders both accept edits. Conflicts are resolved by “last write wins” using each server’s clock. One server’s clock drifted 2 seconds ahead after an NTP correction, and users report their newer edits silently disappearing.',
+      answer: 'Multi-leader',
+      hint: 'Which replication setup creates these conflicts in the first place?',
+      steps: ['Multiple leaders accept concurrent writes to the same key.', 'Last-write-wins trusts wall clocks, which drift and can even jump backwards.', 'The later edit can lose and vanish without a trace.', 'Multi-leader conflict: prefer conflict avoidance (route each key to one leader), version vectors, or CRDTs.'],
+      followups: [
+        { q: 'In a circular multi-leader topology, what happens if one node dies?', options: ['Writes stop propagating around the ring', 'Nothing', 'All data is deleted', 'The ring becomes a star'], why: 'Topology matters: circle and star have single points of failure; all-to-all can reorder causally related writes.' },
+      ],
+    }),
+    (pick) => {
+      const n = pick([3, 5]);
+      const w = n === 3 ? 2 : 3;
+      return {
+        q: `A leaderless store uses N = ${n}, W = ${w}, R = ${w}, so W + R > N. Yet two clients reading at the same moment sometimes get different values, especially after a write that succeeded on only one replica.`,
+        answer: 'Leaderless (quorum)',
+        hint: 'Quorums overlap, but are they truly strongly consistent?',
+        steps: ['W + R > N makes read and write sets overlap.', 'A write that reached fewer than W nodes isn’t rolled back, so some reads see it and others don’t.', 'Concurrent writes can arrive in different orders on different replicas.', 'Leaderless quorums: good, but not strictly linearizable.'],
+        followups: [
+          { q: 'A region is down, so writes go to a backup cluster (a “sloppy quorum”). How does the data get home later?', options: ['Hinted handoff: the backup forwards the writes when the home nodes recover', 'It doesn’t', 'Users must re-enter it', 'A full restore from backup'], why: 'Sloppy quorums improve availability at the cost of consistency.' },
+        ],
+      };
+    },
   ],
 });

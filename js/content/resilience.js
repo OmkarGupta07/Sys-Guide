@@ -128,5 +128,14 @@ SG.add({
         { q: 'Which combination is the standard resilience stack for a remote call?', options: ['Timeout + limited retries with backoff/jitter + circuit breaker (+ bulkhead)', 'Infinite retries', 'No timeout, just a circuit breaker', 'Only logging'], why: 'Each pattern covers a different failure mode.' },
       ],
     }),
+    () => ({
+      q: 'A nightly database snapshot halves the database’s speed. Service B’s queries start timing out and B retries them. Service A, calling B, also times out and retries. Soon both services are down, and restarting B doesn’t help because A floods it immediately.',
+      answer: 'Circuit breaker',
+      hint: 'Something must stop the callers from hammering a struggling dependency.',
+      steps: ['A slow dependency plus retries snowballs: a cascading failure.', 'Restarts don’t help while callers keep flooding.', 'A circuit breaker in A trips when B fails, failing fast and giving B (and the DB) room to recover; it resets automatically.', 'Circuit breaker (with alerts when it trips).'],
+      followups: [
+        { q: 'What’s wrong with setting a 3-second timeout on a call that normally takes 4 seconds?', options: ['Every call times out and retries add load: timeouts must exceed normal latency', 'Nothing', 'It makes calls faster', 'Timeouts don’t affect retries'], why: 'Timeouts are tuned from real latency, not guessed.' },
+      ],
+    }),
   ],
 });

@@ -150,5 +150,17 @@ SG.add({
         { q: 'Which middleman would hide your own servers from the internet?', options: ['Reverse proxy', 'Forward proxy', 'DNS', 'A VPN on the client'], why: 'Reverse proxies represent servers; forward proxies represent clients.' },
       ],
     }),
+    (pick) => {
+      const n = pick(['1M', '3M']);
+      return {
+        q: `A chat service holds ${n} WebSocket connections that stay open for about an hour each. You don’t need path routing or header rewrites, just to spread long-lived connections across servers efficiently.`,
+        answer: 'L4 load balancer',
+        hint: 'Long-lived, stateful connections; no HTTP-level features needed.',
+        steps: ['Connections are long-lived and stateful.', 'No L7 features required.', 'An L4 balancer proxies the connection with minimal overhead (use least-connections).', 'L4 load balancer.'],
+        followups: [
+          { q: 'For internal gRPC microservices with few callers, what avoids an extra network hop entirely?', options: ['Client-side load balancing using a service registry', 'Adding an API gateway', 'A forward proxy', 'DNS with a 1-day TTL'], why: 'Callers pick a healthy instance themselves; gRPC supports this natively.' },
+        ],
+      };
+    },
   ],
 });

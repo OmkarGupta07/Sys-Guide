@@ -170,5 +170,14 @@ SG.add({
         { q: 'How do you make the order POST safe to retry?', options: ['Client sends an Idempotency-Key header; the server stores it and returns the original result on repeats', 'Turn off retries everywhere', 'Use GET instead of POST', 'Add a 5-second sleep before retrying'], why: 'Idempotency keys are how Stripe and Razorpay make payment APIs retry-safe.' },
       ],
     }),
+    () => ({
+      q: 'In a design, every microservice, the database and the cache have public IP addresses so “they’re easy to reach”. Only the load balancer actually needs traffic from the internet.',
+      answer: 'IP and ports',
+      hint: 'Which components should the outside world be able to address?',
+      steps: ['Public IPs are reachable from anywhere: a huge attack surface.', 'Only edge components (load balancer, API gateway) need public addresses.', 'Internal services use private IPs (e.g. 10.x) inside the network.', 'Fix the IP addressing.'],
+      followups: [
+        { q: 'How does HTTP let new and old clients coexist (e.g. compressed vs plain responses)?', options: ['Content negotiation: clients send Accept/Accept-Encoding headers and the server responds with what it supports', 'Separate domains for each version', 'Clients guess', 'The server always sends gzip'], why: 'Headers negotiate capabilities, which keeps HTTP backward compatible.' },
+      ],
+    }),
   ],
 });

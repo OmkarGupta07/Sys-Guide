@@ -157,5 +157,31 @@ SG.add({
         ],
       };
     },
+    (pick) => {
+      const n = pick(['50M', '100M', '200M']);
+      return {
+        q: `A social app with ${n} users needs per-user limits like 100 requests/minute. You can store only two small integers per user, and occasional slight inaccuracy is fine, but the fixed-window boundary burst (200 requests in 2 seconds) is not.`,
+        answer: 'Sliding window',
+        hint: 'Exact logs are too heavy; fixed windows have the boundary problem.',
+        steps: ['A sliding log stores every timestamp: too much memory at this scale.', 'Fixed window allows boundary bursts.', 'Sliding window counter: keep current and previous window counts; estimate = current + previous × (fraction of window remaining).', 'Sliding window (counter variant).'],
+        followups: [
+          { q: 'Previous minute had 8 requests; we’re 70% into the current minute with 6 so far; limit is 10. Allow the next request?', options: ['Yes: estimate = 6 + 8 × 0.3 = 8.4, below 10', 'No: 6 + 8 = 14', 'No: 8 alone exceeds the half limit', 'Yes: only the current window counts'], why: 'The weighted estimate assumes the previous window’s requests were spread evenly.' },
+        ],
+      };
+    },
+    (pick) => {
+      const g = pick([10, 20, 40]);
+      return {
+        q: `${g} API gateway instances share token buckets in Redis. Each check reads tokens and last-refill time, computes, then writes back. Under load, two gateways read the same “1 token left” and both allow a request.`,
+        answer: 'Token bucket',
+        hint: 'The algorithm is right; the read-compute-write isn’t atomic. Which algorithm is this, and how do you fix the race?',
+        steps: ['This is a token bucket stored in Redis.', 'Separate read and write calls race across gateways.', 'Run read-refill-decide-write as one Lua script: Redis executes it atomically (single-threaded).', 'Token bucket with an atomic Lua script.'],
+        followups: [
+          { q: 'Target is 1M checks/s. One Redis node does ~100K ops/s and each check needs ~2 ops. Roughly how many shards?', options: ['At least ~20 (≈50K checks/s per node), plus headroom', '2', '1, Redis is fast enough', '1,000'], why: 'Do the math out loud; seniors are expected to do this proactively.' },
+          { q: 'The Redis shard holding some users’ buckets goes down. Typical choice for protecting the backend?', options: ['Fail closed (or fall back to local in-memory counters) rather than letting unlimited traffic through', 'Fail open always', 'Crash the gateway', 'Queue all requests'], why: 'The limiter exists to protect the backend; a local fallback is better than all-or-nothing.' },
+          { q: 'How should gateways learn about changed rate-limit rules without polling?', options: ['Watch a config store (etcd/ZooKeeper) that pushes changes; keep rules in memory', 'Query the database on every request', 'Redeploy the gateway', 'Poll Redis every request'], why: 'Push-based config avoids per-request lookups and stale polling.' },
+        ],
+      };
+    },
   ],
 });

@@ -126,5 +126,27 @@ SG.add({
         ],
       };
     },
+    () => ({
+      q: 'A report sums all account balances (which must total ₹10 lakh). While it reads row by row, a transfer moves ₹1 lakh from an account it hasn’t read yet to one it already read. The report shows ₹9 lakh, though no data is wrong.',
+      answer: 'Repeatable read',
+      hint: 'The long read saw parts of the table from different moments.',
+      steps: ['This anomaly is read skew.', 'The reader needs one consistent point-in-time view.', 'MVCC snapshot isolation keeps old row versions tagged by transaction; the reader sees the latest version ≤ its snapshot.', 'Repeatable read / snapshot isolation.'],
+      followups: [
+        { q: 'How does MVCC avoid blocking writers during a long read?', options: ['Writers create new row versions; readers keep reading the older versions in their snapshot', 'It locks the whole table', 'Readers copy the database', 'It disables writes'], why: 'Multi-version storage is why reads and writes don’t block each other in Postgres.' },
+      ],
+    }),
+    (pick) => {
+      const what = pick(['the last cupcake in a bakery app', 'a username that must be unique', 'a meeting room slot']);
+      return {
+        q: `Two users claim ${what} at the same time. Each checks “no claim row exists”, then inserts a new claim row. Both succeed, because there was no existing row to lock.`,
+        answer: 'Serializable',
+        hint: 'Locks can’t protect rows that don’t exist yet.',
+        steps: ['The conflict is between two new rows: a phantom.', 'Row locks can’t help; there is no row yet.', 'Serializable isolation detects it, or…', 'Fix: serializable, a unique constraint, or materialising the conflict (pre-create the row to lock).'],
+        followups: [
+          { q: 'What does “materialising conflicts” mean?', options: ['Pre-creating rows (e.g. one per slot/item) so transactions have something to lock', 'Printing the conflicts', 'Deleting duplicate rows later', 'Using a bigger server'], why: 'Turns a phantom into an ordinary row-lock conflict.' },
+          { q: 'For unique usernames, the simplest fix is…', options: ['A UNIQUE constraint so the second insert fails', 'Check-then-insert in Java', 'A retry loop', 'A cache'], why: 'Let the database enforce invariants it can express directly.' },
+        ],
+      };
+    },
   ],
 });

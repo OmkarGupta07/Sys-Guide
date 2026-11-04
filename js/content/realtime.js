@@ -180,5 +180,18 @@ SG.add({
         ],
       };
     },
+    (pick) => {
+      const s = pick([10, 15, 30]);
+      return {
+        q: `After a user taps “Pay”, the order screen should update live for about ${s} seconds: payment pending → confirmed → restaurant accepted. The browser only listens.`,
+        answer: 'SSE',
+        hint: 'Short-lived, one-way updates over normal HTTP.',
+        steps: ['One-way, server to client.', `Lasts only ~${s} seconds per order.`, 'SSE streams events over a normal HTTP response; no new infrastructure.', 'SSE.'],
+        followups: [
+          { q: 'Proxies cut SSE connections after ~30–60 seconds. What happens?', options: ['The browser’s EventSource reconnects automatically and sends the last event ID to resume', 'The user must refresh', 'Events are lost forever', 'SSE switches to UDP'], why: 'Built-in reconnect with Last-Event-ID is a key SSE advantage.' },
+          { q: 'Which load balancer type suits millions of long-lived WebSocket connections?', options: ['L4 (connection-level), typically', 'L7 is always required', 'DNS round robin only', 'No load balancer'], why: 'L7 is the default for HTTP; long-lived stateful connections usually go through L4.' },
+        ],
+      };
+    },
   ],
 });

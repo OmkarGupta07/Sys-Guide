@@ -126,5 +126,17 @@ SG.add({
         { q: 'When does DNS fall back to TCP?', options: ['When the response is too large for a UDP packet (or for zone transfers)', 'Never', 'Always on mobile', 'When the domain is .com'], why: 'Large answers and zone transfers use TCP; the common case is UDP.' },
       ],
     }),
+    (pick) => {
+      const ms = pick([20, 30, 50]);
+      return {
+        q: `An API gateway opens a brand-new connection to Redis for every rate-limit check. Profiling shows ~${ms} ms per request is spent on connection setup alone, before Redis does any work.`,
+        answer: 'TCP',
+        hint: 'What does every new connection cost before data flows?',
+        steps: ['Every new TCP connection costs a 3-way handshake (plus TLS).', 'That’s pure overhead per request.', 'Keep a pool of persistent connections and reuse them.', 'A TCP connection-reuse problem: connection pooling.'],
+        followups: [
+          { q: 'Browsers can’t open raw UDP sockets. What do browser video calls use?', options: ['WebRTC (UDP-based, peer-to-peer, with STUN/TURN servers)', 'Plain HTTP polling', 'FTP', 'SMTP'], why: 'WebRTC is the browser’s route to UDP-style real-time media.' },
+        ],
+      };
+    },
   ],
 });
