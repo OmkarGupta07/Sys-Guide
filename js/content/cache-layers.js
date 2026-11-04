@@ -138,5 +138,26 @@ SG.add({
         { q: 'What does Cache-Control: no-cache mean?', options: ['Store it, but revalidate with the server before every reuse', 'Never store it', 'Cache forever', 'Only CDNs may cache it'], why: 'no-cache ≠ no-store. A classic trick question.' },
       ],
     }),
+    (pick) => {
+      const what = pick(['feature flags and country tax rates', 'a currency-code lookup table', 'permission rules that rarely change']);
+      return {
+        q: `Every single request reads ${what}: a few kilobytes that change maybe once a day. Fetching them from Redis on each request adds a network hop to every API call.`,
+        answer: 'Application cache',
+        hint: 'Tiny, hot, rarely changing data. Where is the closest place to keep it?',
+        steps: ['Read on every request, tiny, rarely changes.', 'A network hop each time is wasted latency.', 'Keep it in each server’s memory (in-process cache, e.g. Caffeine) with a short refresh.', 'Application cache (in-process).'],
+        followups: [
+          { q: 'Main downside of in-process caching across 20 servers?', options: ['Each server has its own copy, so updates can be inconsistent for a while and memory is duplicated', 'It’s slower than Redis', 'It can’t store strings', 'It needs a CDN'], why: 'External caches (Redis) remain the default for shared data.' },
+        ],
+      };
+    },
+    () => ({
+      q: 'Users in Australia load product images from S3 in Virginia with ~300 ms round trips per image. Users in the US see ~30 ms.',
+      answer: 'CDN',
+      hint: 'This is network distance, not disk speed.',
+      steps: ['Latency comes from physical distance.', 'Edge servers near users cut round trips to ~20–40 ms.', 'Images are identical for everyone.', 'CDN (read-through: fetches from origin on a miss).'],
+      followups: [
+        { q: 'Which caching pattern does a CDN follow?', options: ['Read-through: on a miss the edge fetches from the origin, caches, and serves', 'Write-back', 'Write-around', 'None'], why: 'The cache itself performs the fetch on a miss.' },
+      ],
+    }),
   ],
 });

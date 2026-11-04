@@ -126,5 +126,27 @@ SG.add({
         { q: 'The admin must see the new product immediately after saving. Simplest fix?', options: ['Show it from the database (or refresh=wait_for on that write) for the admin view', 'Set refresh to 1 ms for everything', 'Disable the index', 'Tell admins to wait'], why: 'Targeted read-your-writes beats making the whole cluster slower.' },
       ],
     }),
+    () => ({
+      q: 'A bookstore index maps “category” as a full-text field. Users clicking the “Fiction” filter also get Non-fiction books, and facet counts by category look wrong.',
+      answer: 'Elasticsearch index',
+      hint: 'How is the field mapped?',
+      steps: ['Full-text (text) fields are analysed into tokens, so “non-fiction” contains “fiction”.', 'Filters and facets need exact values.', 'Map category as a keyword field (exact match, fast aggregations).', 'Fix the index mapping.'],
+      followups: [
+        { q: 'Users jump to page 500 of results and it’s very slow. Better pagination?', options: ['search_after with a sort key (optionally inside a point-in-time snapshot for consistent pages)', 'from=5000&size=10 always', 'Return all results at once', 'Disable sorting'], why: 'Deep from/size makes every shard collect and sort huge result windows.' },
+        { q: 'A ticket system needs to block double-booking. Check seat availability in Elasticsearch?', options: ['No: it’s eventually consistent; do the check in a transactional database', 'Yes, it’s fast', 'Yes, with more replicas', 'Only on weekends'], why: 'Search indexes lag the source of truth.' },
+      ],
+    }),
+    (pick) => {
+      const n = pick(['20K', '50K']);
+      return {
+        q: `Every product document includes a live stock count, updated ${n} times per second. The search cluster spends most of its time merging segments, and search latency has doubled.`,
+        answer: 'Sync via CDC / queue',
+        hint: 'Elasticsearch is built for reads; look at what’s being written and how.',
+        steps: ['Lucene segments are immutable: every update is a delete + new document.', 'Constant tiny updates cause heavy merging.', 'Keep volatile fields (stock) out of the index or batch them through the queue with bulk updates.', 'Fix the sync pipeline.'],
+        followups: [
+          { q: 'Why are Lucene segments immutable?', options: ['Immutability enables caching, compression and lock-free concurrent reads; updates become soft deletes plus new segments', 'To save disk', 'Because Java requires it', 'They aren’t'], why: 'It’s the core trade-off behind Elasticsearch’s read speed and write cost.' },
+        ],
+      };
+    },
   ],
 });

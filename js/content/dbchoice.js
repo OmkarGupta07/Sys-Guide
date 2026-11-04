@@ -187,5 +187,15 @@ SG.add({
         ],
       };
     },
+    () => ({
+      q: 'Designing an Instagram-like app in an interview: users, follows, posts and likes. A candidate says “it’s a social graph, so we need a graph database like Neo4j”.',
+      answer: 'Relational (PostgreSQL)',
+      hint: 'What does Facebook itself use for its social graph?',
+      steps: ['Follows and likes are just foreign-key relationships.', 'Facebook stores its social graph in MySQL (with caching on top).', 'A graph DB adds risk and questions without solving the interview’s problems.', 'Relational, with indexes on the access patterns.'],
+      followups: [
+        { q: 'The main real reason to pick a document database is…', options: ['Schema flexibility, which matters little in a tightly scoped interview', 'It’s always faster', 'It has stronger transactions', 'It supports SQL joins best'], why: 'Unless you have hands-on experience, Postgres is the safest default.' },
+        { q: 'Which index does GET /users/{id}/posts need on the posts table?', options: ['An index on user_id (often with created_at for sorting)', 'An index on the post caption', 'No index', 'An index on likes_count only'], why: 'Derive indexes from each API endpoint’s query.' },
+      ],
+    }),
   ],
 });

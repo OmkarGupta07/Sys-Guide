@@ -130,5 +130,15 @@ SG.add({
         ],
       };
     },
+    () => ({
+      q: 'A teammate wants a hash index on orders.created_at “because hash lookups are O(1)”. The main queries are “orders between two dates” and “latest orders first”.',
+      answer: 'B-tree index',
+      hint: 'Which index supports ranges and sorting?',
+      steps: ['Hash indexes only help exact matches.', 'Range queries and ORDER BY need sorted order.', 'B-trees handle exact, range and sort, and are nearly as fast for exact lookups.', 'B-tree index.'],
+      followups: [
+        { q: 'Users search businesses with “pizza” anywhere in the name (LIKE \'%pizza%\'). Which index helps?', options: ['An inverted (full-text) index, e.g. Postgres full-text or Elasticsearch', 'A B-tree on name', 'A hash index on name', 'A composite index'], why: 'B-trees help prefixes, not substrings anywhere in the text.' },
+        { q: 'Finding restaurants within 2 km with two B-tree indexes (lat, lng) is slow. Why?', options: ['Each gives a huge strip; intersecting them still scans many rows. Use a geospatial index', 'B-trees can’t store decimals', 'The table needs more columns', 'Indexes don’t work on floats'], why: '1D sorted indexes don’t preserve 2D closeness.' },
+      ],
+    }),
   ],
 });

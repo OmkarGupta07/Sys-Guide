@@ -127,5 +127,18 @@ SG.add({
         ],
       };
     },
+    (pick) => {
+      const gb = pick([8, 16, 32]);
+      return {
+        q: `Redis is used purely as a cache with maxmemory ${gb} GB. Keys have no TTLs. When memory fills up, writes start failing with OOM errors. You want Redis to drop the entries nobody has touched for the longest time.`,
+        answer: 'LRU',
+        hint: 'Which entries should go when space runs out?',
+        steps: ['The default “noeviction” policy rejects writes when full.', 'For a pure cache, evict the least recently used keys.', 'Set maxmemory-policy allkeys-lru.', 'LRU.'],
+        followups: [
+          { q: 'Redis persists to its append-only file about once per second by default. What can a crash lose?', options: ['Up to about the last second of writes', 'Nothing, ever', 'All data', 'Only keys with TTLs'], why: 'Fine for a cache; for durable data, think about fsync settings and replicas.' },
+          { q: 'Which Redis structure makes a top-K leaderboard easy?', options: ['A sorted set (ZADD, ZREVRANGE, trim with ZREMRANGEBYRANK)', 'A list', 'A plain string', 'Pub/Sub'], why: 'Sorted sets keep members ordered by score in O(log N).' },
+        ],
+      };
+    },
   ],
 });

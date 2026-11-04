@@ -155,5 +155,15 @@ SG.add({
         { q: 'Would write-back be a reasonable alternative here?', options: ['No. Audit logs must not be lost, and write-back risks losing unflushed data', 'Yes, it’s always faster', 'Yes, audit data doesn’t matter', 'Only on weekends'], why: 'Durability requirements rule out write-back for anything legal or financial.' },
       ],
     }),
+    () => ({
+      q: 'In an interview, you add Redis in front of Postgres for product reads. The interviewer asks which caching pattern you’ll use by default, and to describe its read and write behaviour in one breath.',
+      answer: 'Cache-aside',
+      hint: 'The industry default that needs no special library.',
+      steps: ['Read: check Redis; on miss read Postgres, store in Redis with a TTL, return.', 'Write: update Postgres, delete the cache key.', 'Works with plain Redis/Memcached; cache only holds what’s read.', 'Cache-aside.'],
+      followups: [
+        { q: 'Why is write-through harder to implement with plain Redis?', options: ['Redis doesn’t write to your database itself; you need a library (e.g. Spring Cache) or app logic, and must handle dual-write failures', 'Redis can’t store writes', 'It’s illegal', 'It is easier'], why: 'Write-through and read-through need the cache layer to talk to the database.' },
+        { q: 'The interviewer asks “what exactly is your cache key?” for product pages. Good answer?', options: ['product:{productId} (plus locale/currency if responses differ)', '“The product”', 'A random UUID per request', 'The SQL query text with timestamps'], why: 'Interviewers probe the key; vague answers lose points.' },
+      ],
+    }),
   ],
 });

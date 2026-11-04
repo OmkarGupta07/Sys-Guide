@@ -128,5 +128,26 @@ SG.add({
         ],
       };
     },
+    (pick) => {
+      const rps = pick(['50K', '100K', '200K']);
+      return {
+        q: `The home feed is cached with a 60-second TTL and served at ${rps} requests per second. Every minute, latency spikes and database CPU hits 100% for a few seconds.`,
+        answer: 'Cache stampede',
+        hint: 'What happens at the exact moment the key expires?',
+        steps: ['The hot key expires on a fixed schedule.', `${rps} requests/s all miss at once and rebuild it.`, 'Cache stampede.', 'Fix: single-flight (one rebuilds, others wait) or cache warming (refresh at ~55 s so it never expires).'],
+        followups: [
+          { q: 'What is “cache warming” here?', options: ['Proactively refreshing the hot key shortly before it expires, so it’s never missing', 'Heating the server', 'Increasing the TTL to a day', 'Deleting the key early'], why: 'For a handful of known hot keys, refreshing ahead is simple and effective.' },
+        ],
+      };
+    },
+    () => ({
+      q: 'Your Redis cluster has 12 nodes. Redis Cluster assigns each key to one of 16,384 hash slots, and a celebrity’s profile key receives millions of reads per second on one node.',
+      answer: 'Hot key',
+      hint: 'More nodes won’t help: the key still maps to one slot.',
+      steps: ['One key = one slot = one node.', 'That node saturates regardless of cluster size.', 'Replicate the key (profile#1..#N) across nodes and read a random copy, or add an in-process cache.', 'Hot key.'],
+      followups: [
+        { q: 'In Redis Cluster, how do you control which node a key lives on?', options: ['Only through the key itself (its hash slot), e.g. hash tags {user123}', 'By configuring each node manually per key', 'Randomly, it can’t be controlled', 'By the value size'], why: 'In Redis, sharding is entirely about key design.' },
+      ],
+    }),
   ],
 });

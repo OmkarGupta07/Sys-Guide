@@ -129,5 +129,29 @@ SG.add({
         ],
       };
     },
+    (pick) => {
+      const c = pick(['a cricket superstar', 'a Bollywood star', 'a global footballer']);
+      return {
+        q: `Posts are hash-sharded by user_id. ${c[0].toUpperCase() + c.slice(1)} lands on shard 4, which now gets 50x the writes and reads of any other shard. Everyone else is evenly spread.`,
+        answer: 'Directory-based',
+        hint: 'Most users are fine; a few outliers need custom placement.',
+        steps: ['Hashing spreads normal users evenly.', 'Extreme outliers create hot shards.', 'Detect celebrities and route them via a small lookup table to a dedicated (bigger) shard; everyone else stays hashed.', 'Directory-based placement for the outliers.'],
+        followups: [
+          { q: 'Another fix that keeps pure hashing?', options: ['A compound key (user_id + suffix 1..N) to spread that user’s data across shards', 'Delete the celebrity', 'Use range sharding', 'One bigger shard for everyone'], why: 'Compound keys trade single-shard reads for spread-out load.' },
+        ],
+      };
+    },
+    (pick) => {
+      const tb = pick([2, 3]);
+      return {
+        q: `An interviewer’s numbers: 500M users × 5 KB = ${tb === 2 ? '2.5' : '3'} TB, and about 3K writes/s at peak. A candidate immediately says “we shard by user_id”. Which distribution would sharding imply by default, and was it even needed?`,
+        answer: 'Hash sharding',
+        hint: 'Say what “shard by user_id” implies, then check the math.',
+        steps: ['“Shard by user_id” implies hash sharding with consistent hashing by default.', `But ~${tb === 2 ? '2.5' : '3'} TB and 3K writes/s fit one well-sized Postgres (with replicas).`, 'Strong answer: “no need to shard yet; I’d shard by hashed user_id if storage or writes grow 10–100x.”', 'Hash sharding is the implied default; sharding itself isn’t justified yet.'],
+        followups: [
+          { q: 'What four things should you say when sharding is justified?', options: ['The shard key, the distribution strategy, the trade-offs (cross-shard queries), and how you’ll grow/reshard', 'Only the database brand', 'The number of servers only', 'Nothing, it’s implied'], why: 'A short, justified script beats reflexive sharding.' },
+        ],
+      };
+    },
   ],
 });
