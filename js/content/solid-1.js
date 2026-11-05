@@ -111,5 +111,26 @@ SG.add({
         ],
       };
     },
+    (pick) => {
+      const c = pick(['SPORTS', 'MUSIC', 'KIDS']);
+      return {
+        q: `EarningsCalculator has a switch on a Video’s category enum (GAMING, EDUCATIONAL, ENTERTAINMENT). Adding ${c} to the enum breaks compilation of the exhaustive switch, and someone must edit the tested calculator again.`,
+        answer: 'Open/Closed (OCP)',
+        hint: 'Every new category means modifying existing code.',
+        steps: ['New variants force edits to a central class.', 'Make an EarningsCalculator interface with one implementation per category.', `Adding ${c} becomes a new class; old classes stay untouched.`, 'Open/Closed.'],
+        followups: [
+          { q: 'Which pattern lets you add behaviour around an existing class (e.g. logging) without modifying it, switchable at runtime via DI?', options: ['Decorator', 'Singleton', 'Prototype', 'Builder'], why: 'Wrapping an object behind the same interface is a classic way to stay closed for modification.' },
+        ],
+      };
+    },
+    () => ({
+      q: 'PremiumVideo extends Video, but premium videos never show ads, so it overrides playRandomAd() to throw an exception. Code that loops over a List<Video> and plays ads now crashes on premium items.',
+      answer: 'Liskov Substitution (LSP)',
+      hint: 'Can every Video in the list be treated like a Video?',
+      steps: ['The subclass breaks a promise the parent makes.', 'Callers can’t substitute it safely.', 'Use composition (videos delegate to the behaviours they need) or separate capabilities.', 'Liskov substitution violation.'],
+      followups: [
+        { q: 'You make a VideoActions interface with both playRandomAd() and getHoursPlayed(). Premium still must implement playRandomAd(). Which principle says to split it?', options: ['Interface Segregation: a separate AdActions interface only ad-supported videos implement', 'Single Responsibility', 'DRY', 'Open/Closed'], why: 'LSP and ISP often show up together in the same refactor.' },
+      ],
+    }),
   ],
 });

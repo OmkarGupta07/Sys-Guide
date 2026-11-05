@@ -129,5 +129,14 @@ SG.add({
         ],
       };
     },
+    () => ({
+      q: 'Event data lives on 4 databases placed on a hash ring, one point each. You decommission database 2, and database 3 suddenly holds twice as much data and traffic as the others.',
+      answer: 'Consistent hashing',
+      hint: 'Removing a node dumps its whole arc onto the next node clockwise.',
+      steps: ['With one point per node, a removed node’s entire range goes to its single neighbour.', 'Place each database at many points (virtual nodes).', 'Its ranges then spread across all remaining databases.', 'Consistent hashing with virtual nodes.'],
+      followups: [
+        { q: 'In an interview, when should you explain consistent hashing in depth rather than just name it?', options: ['When you’re designing the scaled component itself (a distributed cache, database or queue)', 'Every time you mention Redis', 'Never', 'Only for SQL databases'], why: 'Most of the time it’s enough to say the store (Redis, Cassandra, DynamoDB) uses it internally.' },
+      ],
+    }),
   ],
 });

@@ -159,5 +159,17 @@ SG.add({
         { q: 'Which caching pattern does a CDN follow?', options: ['Read-through: on a miss the edge fetches from the origin, caches, and serves', 'Write-back', 'Write-around', 'None'], why: 'The cache itself performs the fetch on a miss.' },
       ],
     }),
+    (pick) => {
+      const what = pick(['a magazine app that publishes one big edition each month', 'a cricket app whose match highlights are released at a known time', 'an OTT platform launching a new series at midnight']);
+      return {
+        q: `You run ${what}. You know exactly which files will be hot, and the first viewers shouldn’t pay the cost of a cache miss.`,
+        answer: 'CDN',
+        hint: 'Should the CDN wait for the first request, or be loaded in advance?',
+        steps: ['Static media for many users: CDN.', 'Popular content is known in advance.', 'Push (pre-populate) it to the edges before release.', 'CDN, push model.'],
+        followups: [
+          { q: 'TikTok-style apps can’t know which of millions of uploads will be popular. Which CDN model?', options: ['Pull: edges fetch from the origin on the first request and cache it', 'Push everything everywhere', 'No CDN', 'Push only the oldest videos'], why: 'Pull CDNs naturally cache what is actually requested; the first request is a miss.' },
+        ],
+      };
+    },
   ],
 });

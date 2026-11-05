@@ -150,6 +150,15 @@ SG.add({
         { q: 'Which middleman would hide your own servers from the internet?', options: ['Reverse proxy', 'Forward proxy', 'DNS', 'A VPN on the client'], why: 'Reverse proxies represent servers; forward proxies represent clients.' },
       ],
     }),
+    () => ({
+      q: 'Your internal services speak gRPC, but mobile and web clients need REST/JSON. Every service also re-implements the same JWT check and rate limiting.',
+      answer: 'API gateway',
+      hint: 'One entry point that routes, runs shared middleware and transforms responses.',
+      steps: ['Shared middleware (auth, rate limiting, logging) belongs in one place.', 'Clients need one stable endpoint.', 'The gateway validates, runs middleware, routes by path, and transforms gRPC responses to JSON.', 'API gateway.'],
+      followups: [
+        { q: 'How much interview time should you spend on the API gateway?', options: ['Very little: place it, say it routes and handles middleware, and move on', 'At least 15 minutes', 'Skip it entirely in a microservices design', 'Design its internals in depth'], why: 'It’s expected in a microservices design; over-explaining it costs time you need for deep dives.' },
+      ],
+    }),
     (pick) => {
       const n = pick(['1M', '3M']);
       return {

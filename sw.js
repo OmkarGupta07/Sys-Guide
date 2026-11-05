@@ -1,5 +1,5 @@
 // Bump VERSION whenever any file below changes, so phones pick up the new copy.
-const VERSION = 'sg-v10';
+const VERSION = 'sg-v11';
 const FILES = [
   './', 'index.html', 'css/app.css', 'js/app.js', 'js/curriculum.js', 'SYLLABUS.md', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png',

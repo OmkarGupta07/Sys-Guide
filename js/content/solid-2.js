@@ -129,5 +129,23 @@ SG.add({
         ],
       };
     },
+    () => ({
+      q: 'A generic Repository interface has findById, findAll, save, update and delete. A read-only reporting service must implement all five, so it throws UnsupportedOperationException for the write methods.',
+      answer: 'Interface Segregation (ISP)',
+      hint: 'A client is forced to depend on methods it never uses.',
+      steps: ['The interface mixes read and write roles.', 'Split into ReadRepository and WriteRepository (and maybe DeleteRepository).', 'A full CrudRepository can extend all of them for clients that need everything.', 'Interface segregation.'],
+      followups: [
+        { q: 'Is “one method per interface” the goal of ISP?', options: ['No: split by client role; over-splitting adds noise without benefit', 'Yes, always', 'Only in Java', 'Only for repositories'], why: 'Principles are guidelines; over-applying them is its own smell.' },
+      ],
+    }),
+    () => ({
+      q: 'A team asks why their services depend on interfaces when “we’ll never swap the database anyway”. The services are hard to unit test today because they construct concrete repositories internally.',
+      answer: 'Dependency Inversion (DIP)',
+      hint: 'What practical benefit do they get every single day, even if they never swap databases?',
+      steps: ['High-level code depends on abstractions; concrete classes are injected.', 'Swapping databases is rare, but testing is constant.', 'Constructor-inject the repository interface; tests pass a mock or fake.', 'Dependency inversion (main payoff: testability).'],
+      followups: [
+        { q: 'Does DIP require an interface for every single class?', options: ['No: use abstractions at boundaries (DB, external APIs, messaging) where you need seams', 'Yes, always', 'Only for static classes', 'Only for DTOs'], why: 'Interfaces with exactly one implementation everywhere add ceremony; place them where they earn their keep.' },
+      ],
+    }),
   ],
 });
