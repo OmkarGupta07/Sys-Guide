@@ -21,8 +21,8 @@ To update: rebuild `dist/` (bump `VERSION` in `sw.js` first), then in Netlify op
 
 ## Add a topic
 
-1. Copy a file in `js/content/` (format is described at the top of `js/app.js`).
-2. Add its `<script>` to `index.html` and its path to `FILES` in `sw.js`, then bump `VERSION` in `sw.js`.
+1. Copy a file in `js/content/` (format is described at the top of `js/app.js`) and make sure its id is on the path in `js/curriculum.js`.
+2. Run `node tools/wire.js` — registers every lesson in `index.html` and the offline cache in `sw.js`, and bumps the cache version automatically.
 3. Run `node tools/check.js` — it runs every scenario 50 times and fails on any broken content.
 
 ## Later

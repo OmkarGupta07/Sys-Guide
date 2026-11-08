@@ -5,7 +5,17 @@
 //   options: { Name: { eli5, industry[], def, scenarios[], scale } },
 //   scenarios: [ (pick) => ({ q, answer, hint, steps[], followups: [{ q, options[] (correct first), why }] }) ] }
 // tools/check.js validates every topic.
-const SG = (window.SG = { topics: [], add(t) { this.topics.push(t); } });
+// Lesson text is rendered with innerHTML, so escape it once here: Java generics like Map<K, V>
+// or a literal <script> in an XSS question must show as text, never become markup.
+const escText = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const escDeep = (v) => {
+  if (typeof v === 'string') return escText(v);
+  if (Array.isArray(v)) return v.map(escDeep);
+  if (typeof v === 'function') return (...args) => escDeep(v(...args));
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [escText(k), escDeep(x)]));
+  return v;
+};
+const SG = (window.SG = { topics: [], add(t) { this.topics.push(escDeep(t)); } });
 
 const $view = () => document.getElementById('view');
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
