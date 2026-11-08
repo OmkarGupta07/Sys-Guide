@@ -85,10 +85,13 @@ function home() {
     const p = prog[s.id] || {};
     const status = s.done ? `<span class="pill done">${p.best}%</span>` : !s.unlocked ? '<span class="lock">Locked</span>' : s.t ? '<span class="pill">Today</span>' : '<span class="lock">Being written</span>';
     const inner = `<span class="dnum">${s.day}</span><span class="dtitle">${s.title}<small>${s.refs}</small></span>${status}`;
-    return s.unlocked && s.t ? `<a class="drow${s === today ? ' now' : ''}" href="#/t/${s.id}">${inner}</a>` : `<div class="drow off">${inner}</div>`;
+    const cls = `${s.done ? ' done reached' : ''}${s === today ? ' now reached' : ''}`;
+    return s.unlocked && s.t ? `<a class="drow${cls}" href="#/t/${s.id}">${inner}</a>` : `<div class="drow off${cls}">${inner}</div>`;
   };
-  const weeks = [];
-  for (let i = 0; i < st.length; i += 7) weeks.push(st.slice(i, i + 7));
+  // One path: day circles joined by a line that turns green as you go, with a quote at each new week.
+  const path = st.map((s, i) => (i % 7 === 0
+    ? `<div class="pq${i && st[i - 1].done ? ' lit' : ''}"><div class="eyebrow">Week ${i / 7 + 1}</div><p>${QUOTES[(i / 7) % QUOTES.length]}</p></div>`
+    : '') + row(s)).join('');
   const drillReady = doneCount >= 2;
 
   render(`
@@ -109,7 +112,7 @@ function home() {
       <div class="eyebrow" style="color:inherit;opacity:.8">Mixed drill</div>
       <h3>8 scenarios from days you’ve finished</h3>
       <p class="muted small">Closest thing to an interview: you don’t know which topic is coming.</p></a>` : ''}
-    ${weeks.map((w, i) => `<div class="section-title">Week ${i + 1}</div><div class="days">${w.map(row).join('')}</div>`).join('')}
+    <div class="path">${path}</div>
     <p class="small muted" style="margin-top:32px">${read} lessons read so far. <a href="#/syllabus" class="link">See the full syllabus</a></p>
   `);
   const btn = document.getElementById('install');
@@ -152,8 +155,28 @@ function streakCard(prog) {
     return `<span class="wd${days.includes(dayKey(d)) ? ' on' : ''}${i === 6 ? ' today' : ''}"><i></i>${d.toLocaleDateString('en', { weekday: 'narrow' })}</span>`;
   }).join('');
   const msg = doneToday ? 'Done for today. See you tomorrow.' : cur ? `Finish today’s round to keep your ${cur}-day streak.` : 'Finish one practice round today to start a streak.';
-  return `<div class="streak"><div><b>${cur}</b><span>day streak${s.best ? ` · best ${s.best}` : ''}</span><p>${msg}</p></div><div class="week">${week}</div></div>`;
+  const q = QUOTES[Math.floor(Date.now() / 864e5) % QUOTES.length]; // a new quote each day
+  return `<div class="streak col"><div class="top"><div><b>${cur}</b><span>day streak${s.best ? ` · best ${s.best}` : ''}</span><p>${msg}</p></div><div class="week">${week}</div></div><p class="streak-q">${q}</p></div>`;
 }
+
+const QUOTES = [
+  'Forty minutes a day beats a weekend of cramming.',
+  'Every senior engineer once asked “why not just use a cache?”',
+  'You don’t need to know everything. You need to know why.',
+  'Small daily wins compound into an offer letter.',
+  'Trade-offs are the answer. The diagram is just the proof.',
+  'The interviewer isn’t looking for perfect. They’re looking for clear thinking.',
+  'Show up today. Future you is counting on it.',
+  'A streak is just a promise you keep to yourself.',
+  'Scale is learned one bottleneck at a time.',
+  'Confusion is the feeling of learning something new.',
+  'Say the requirements out loud. Half the design is in them.',
+  'Consistency is the cheapest superpower there is.',
+  'You were a beginner at Java once too. Look at you now.',
+  'Don’t memorize systems. Understand the pressures that shape them.',
+  'One more lesson is one less surprise in the interview.',
+  'Progress, not perfection. Then a little more progress.',
+];
 
 // Day N unlocks when day N-1 has at least one finished practice round.
 function pathState(prog = store.get()) {

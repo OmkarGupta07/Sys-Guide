@@ -190,13 +190,18 @@ button { font: inherit; color: inherit; }
 .streak b { font-family: var(--serif); font-size: 34px; line-height: 1; color: var(--accent); margin-right: 8px; }
 .streak span { font-size: 14px; color: var(--ink-2); }
 .streak p { font-size: 13px; color: var(--ink-3); margin-top: 6px; }
-.week { display: flex; gap: 6px; flex: none; }
+.week { display: flex; gap: 8px; flex: none; }
 .wd { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--ink-3); }
-.wd i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line); }
-.wd.on i { background: var(--accent); border-color: var(--accent); }
+.wd i { position: relative; width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line); }
+.wd.on i { background: var(--accent); border-color: var(--accent); box-shadow: var(--glow); }
+/* green link between back-to-back study days */
+.wd.on + .wd.on i::before { content: ""; position: absolute; right: 100%; top: 50%; width: 9px; height: 2px; margin-top: -1px; background: var(--accent); }
+.streak .streak-q { font-family: var(--serif); font-style: italic; font-size: 14px; color: var(--ink-2); border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+.streak.col { flex-direction: column; align-items: stretch; }
+.streak .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .wd.today { color: var(--ink); font-weight: 600; }
 .streak-note { display: inline-block; margin-top: 14px; font-size: 14px; font-weight: 500; color: var(--accent); background: var(--accent-soft); padding: 4px 12px; border-radius: 99px; }
-@media (max-width: 380px) { .streak { flex-direction: column; align-items: flex-start; } }
+@media (max-width: 380px) { .streak .top { flex-direction: column; align-items: flex-start; } }
 
 /* daily path */
 .tcard.today { border-color: var(--accent); border-width: 1.5px; box-shadow: 0 0 24px rgba(57, 255, 136, 0.12); }
@@ -204,13 +209,24 @@ button { font: inherit; color: inherit; }
 .streak b, .score { text-shadow: var(--glow); }
 .progress i { box-shadow: var(--glow); }
 .drow.now .dnum { box-shadow: var(--glow); }
-.days { display: grid; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-.drow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; text-decoration: none; }
-.drow + .drow { border-top: 1px solid var(--line); }
+.path { display: grid; margin-top: 24px; }
+/* each row draws half of the line above its circle and half below; green once that stretch is walked */
+.drow { position: relative; display: flex; align-items: center; gap: 14px; padding: 10px 12px 10px 6px; text-decoration: none; border-radius: 12px; }
+.drow::before, .drow::after, .pq::before { content: ""; position: absolute; left: 22px; width: 2px; background: var(--line); }
+.drow::before { top: 0; height: 50%; }
+.drow::after { top: 50%; bottom: 0; }
+.path > :first-child::before, .path > :last-child::after { display: none; }
+.drow.reached::before, .drow.done::after, .pq.lit::before { background: var(--accent); box-shadow: var(--glow); }
 .drow.off { color: var(--ink-3); }
 .drow.now { background: var(--accent-soft); }
-.dnum { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--ink-2); }
-.drow.now .dnum { background: var(--accent); color: var(--accent-ink); }
+.dnum { position: relative; z-index: 1; flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--ink-3); border: 2px solid var(--line); }
+.drow.done .dnum { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.drow.now .dnum { background: var(--bg); border-color: var(--accent); color: var(--accent); }
+.pq { position: relative; padding: 14px 12px 14px 54px; }
+.pq::before { top: 0; bottom: 0; }
+.pq .eyebrow { margin-bottom: 4px; }
+.pq p { font-family: var(--serif); font-style: italic; font-size: 15px; color: var(--ink-2); margin: 0; }
+.pq.lit p { color: var(--ink); }
 .dtitle { flex: 1; min-width: 0; font-size: 15px; line-height: 1.4; }
 .dtitle small { display: block; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
 .lock { font-size: 12px; color: var(--ink-3); white-space: nowrap; }
