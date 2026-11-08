@@ -5,7 +5,7 @@ SG.add({
   title: 'LLD: vending machine and ATM',
   short: 'Vending and ATM',
   blurb: 'Machines with modes: State for flows, Chain of Responsibility for notes, safe inventory, commands and payments.',
-  intro: 'Vending machines and ATMs are “a device with modes”: the same button does different things depending on whether money is inserted, a card is in, or stock is out. That is the State pattern. Around it sit a few more decisions: dispensing cash in denominations (Chain of Responsibility), keeping stock and cash counts correct under concurrency, recording each operation as a command for audit or undo, and accepting several payment methods (Strategy).',
+  intro: 'Vending machines and ATMs are “a device with modes”: the same button does different things depending on whether money is inserted, a card is in, or stock is out. That is the State pattern. Around it sit a few more decisions: dispensing cash or change in denominations (Chain of Responsibility), an inventory that maps aisles to products and keeps stock correct under concurrency, recording each operation as a command for audit or undo, and accepting several payment methods (Strategy).',
   options: {
     'State pattern for machine modes': {
       eli5: 'A chai vending machine ignores the “dispense” button until you put in a coin, and refuses coins when it is out of cups. Each mode decides what buttons mean.',
@@ -14,7 +14,7 @@ SG.add({
         'ATM: Idle → CardInserted → PinVerified → TransactionSelected → Dispensing → Ejecting card.',
         'Metro token and parking pay machines follow the same structure.',
       ],
-      def: 'Define a MachineState interface with every user action (insertCoin, selectItem, dispense, cancel). Each concrete state implements only what is legal and rejects the rest; the Machine holds a current state and delegates. Transitions live inside states, so adding Maintenance is one new class, not edits to every if/else.',
+      def: 'Define a MachineState interface with every action (insertCoin, pressButton(aisle), dispense, cancel). Each state gets the machine as its context, implements what is legal and throws IllegalStateException for the rest; the Machine holds the current state and delegates. The core vending loop is NoCoin → HasCoin → Dispensing → NoCoin, with dispense triggered by the machine, not the user. Transitions live inside states, so adding SoldOut or Maintenance is one new class, not edits to every if/else.',
       scenarios: [
         'Buttons behave differently depending on what happened before',
         'New modes (maintenance, out of service) get added',
@@ -37,20 +37,20 @@ SG.add({
       ],
       scale: 'O(number of denominations). Greedy is correct for Indian note sets; dry-run before mutating counts.',
     },
-    'Thread-safe inventory': {
-      eli5: 'Two office staff press “buy” for the last cold coffee at two screens of the same machine. Only one should get it and only one should pay.',
+    'Inventory with aisles and safe stock': {
+      eli5: 'The machine has numbered shelves. A new snack gets an empty shelf, an emptied shelf goes back on the free list, and when two people grab for the last packet only one hand gets it.',
       industry: [
+        'Map<aisle, Product> for what sits where, Map<productId, count> for stock, and a Queue<Integer> of free aisles.',
         'Smart vending machines with app ordering plus a touch screen hitting the same stock.',
         'ATM cash counts updated by withdrawals and by the replenishment process.',
-        'ConcurrentHashMap<String, AtomicInteger> or a lock around check-and-decrement.',
       ],
-      def: 'Stock and cash counts are shared mutable state. Decrement must be a compare-and-act: AtomicInteger with a CAS loop (decrement only if > 0), ConcurrentHashMap.compute per slot, or one lock around reserve-and-charge when several values must change together. Never read, then decrement in two separate steps.',
+      def: 'Keep Inventory as its own class behind the machine: a new product takes an aisle from the free-aisle queue (error if none), and when a product’s count reaches zero its aisle returns to the queue. Stock is shared mutable state, so decrement must be compare-and-act: AtomicInteger.getAndUpdate (only if > 0), ConcurrentHashMap.compute per aisle, or one lock when several values (stock and cash) must change together.',
       scenarios: [
+        'Products are added to a fixed number of physical aisles',
         'Two inputs can buy the same last item',
-        'Stock and cash must stay consistent with each other',
         'Restocking runs while sales continue',
       ],
-      scale: 'Per-slot atomics have no global contention; use one lock only when an invariant spans several fields.',
+      scale: 'Map lookups are O(1); per-aisle atomics have no global contention; use one lock only when an invariant spans several fields.',
     },
     'Command for transactions and audit': {
       eli5: 'Every request is written on a slip (“withdraw ₹3,000 from account X”), filed in order, and can be replayed or reversed later.',
@@ -93,7 +93,7 @@ SG.add({
         steps: ['Behaviour per action depends on the mode, duplicated across methods.', 'Create IdleState, HasMoneyState, DispensingState, OutOfStockState, MaintenanceState.', 'Machine delegates each action to the current state; states set the next one.', 'IdleState.dispense() rejects the call, so the bug disappears.'],
         followups: [
           { q: 'Who should change the machine’s state: the machine or the state objects?', options: ['The state objects call machine.setState(next) as part of each action', 'The client code calling the machine', 'A static global variable', 'A separate thread polling'], why: 'Keeping transitions in states keeps each mode’s rules in one place.' },
-          { q: 'How would you test “cancel in HasMoney refunds the coins” in isolation?', options: ['Create the machine with a mocked PaymentStrategy, put it in HasMoney, call cancel, verify refund()', 'Run the full machine with real coins', 'Test only via the UI', 'You cannot test states separately'], why: 'Injected collaborators make state transitions unit-testable.' },
+          { q: 'In HasMoney the user presses a button for a sold-out item. What should happen?', options: ['Stay in HasMoney, report sold out, and let the user pick again or cancel for a refund', 'Move to Dispensing and dispense nothing', 'Keep the money and return to Idle', 'Throw and leave the coins stuck with no way out'], why: 'A failed selection must not lose money; cancel is the exit that refunds it.' },
         ],
       };
     },
@@ -114,7 +114,7 @@ SG.add({
       const n = pick([2, 3]);
       return {
         q: `A smart vending machine in a Gurugram office takes orders from a touch screen and a mobile app at the same time. The last ${n === 2 ? 'unit' : 'few units'} of cold coffee were sold ${n} times over; refunds are piling up.`,
-        answer: 'Thread-safe inventory',
+        answer: 'Inventory with aisles and safe stock',
         hint: 'Check stock and take stock must be one step.',
         steps: ['if (stock > 0) stock-- runs on two threads: check-then-act race.', 'Use AtomicInteger with a CAS loop that decrements only when > 0.', 'Charge payment only after the reservation succeeds; restore stock on payment failure.', 'Per-slot atomics avoid a global lock.'],
         followups: [
@@ -156,6 +156,33 @@ SG.add({
         steps: ['The allowed actions depend on the ATM’s current mode.', 'Define Idle, CardInserted, Authenticated, OutOfCash states.', 'Each state accepts only its legal actions and picks the next state.', 'OutOfCash allows enquiry but rejects withdraw.'],
         followups: [
           { q: 'Where should the wrong-PIN counter live?', options: ['In the session/context object the states share', 'A static field on ATM', 'In each state class as a static', 'In the bank card'], why: 'Context data belongs to the session; states stay stateless and reusable.' },
+        ],
+      };
+    },
+    (pick) => {
+      const aisles = pick([20, 40, 50]);
+      const item = pick(['Kurkure', 'Maaza', 'a protein bar']);
+      return {
+        q: `A railway-station vending machine has ${aisles} physical aisles. The admin adds stock by product (“add 8 × ${item}”); a product already in the machine should just get more units, a new one needs a free aisle, and an aisle that sells out must become free for a different product. Today aisles are hard-coded in an array of 50 Strings.`,
+        answer: 'Inventory with aisles and safe stock',
+        hint: 'Separate “what sits where” from “how many are left”, and track the free shelves.',
+        steps: ['Pull stock handling out of VendingMachine into an Inventory class.', 'Map<aisle, Product> answers what a button means; Map<productId, count> answers how many are left.', 'Queue<Integer> of free aisles: a new product polls one (error if empty); count hitting zero offers the aisle back.', 'States ask Inventory for product, availability and deduction instead of touching arrays.'],
+        followups: [
+          { q: 'Restocking by the admin runs while customers buy. What keeps the count correct?', options: ['Update counts atomically, e.g. ConcurrentHashMap.compute or merge per product', 'Mark the HashMap volatile', 'Read the count, add, then put it back', 'Disable sales by sleeping the thread'], why: 'compute/merge make each read-modify-write a single atomic step per key.' },
+          { q: 'Should the customer-facing API expose Inventory directly?', options: ['No; clients call insertCoin and pressButton on the machine, which delegates', 'Yes, so the app can decrement stock itself', 'Yes, as a public static field', 'Only through reflection'], why: 'Encapsulation keeps every stock change inside the machine’s state flow.' },
+        ],
+      };
+    },
+    (pick) => {
+      const price = pick([15, 25, 35]);
+      const paid = pick([50, 100]);
+      return {
+        q: `A metro-station snack machine sells an item at ₹${price}; a customer inserts ₹${paid}. The machine holds limited ₹10, ₹5, ₹2 and ₹1 coins in separate tubes. Today it computes change = paid − price and assumes it can always pay it, and twice it dispensed the snack but jammed with no change to give.`,
+        answer: 'Chain of Responsibility for cash',
+        hint: 'Change is not just a number; each coin tube has limited stock.',
+        steps: ['Each coin tube is a handler knowing its value and remaining count.', 'The ₹10 handler gives min(remainder / 10, count) coins and passes the rest to ₹5, then ₹2, then ₹1.', 'Dry-run the chain before dispensing; if the remainder is not zero, reject the sale and refund.', 'Commit coin counts and stock only after the plan succeeds.'],
+        followups: [
+          { q: 'When should the change check happen relative to dispensing?', options: ['Before moving to Dispensing; if exact change is impossible, refund and stay out of Dispensing', 'After the item drops', 'At the end of the day', 'Only when the customer complains'], why: 'Checking first keeps money, coins and stock consistent.' },
         ],
       };
     },

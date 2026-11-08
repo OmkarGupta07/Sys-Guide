@@ -5,118 +5,140 @@ SG.add({
   title: 'Design BookMyShow',
   short: 'Ticket booking',
   blurb: 'Browse and search shows freely, but never sell one seat twice, even when a million fans arrive at once.',
-  intro: 'Scope: users browse and search events (films, concerts, IPL matches), open a seat map, pick seats, pay, and get tickets. The NFRs split by feature: browsing and search must be highly available and fast (search under ~500 ms, reads outnumber bookings ~100:1), while booking must be strongly consistent, so no seat is ever sold twice. Hot events add a third NFR: survive millions of users arriving in the same minute. The usual design is: a seat hold with a TTL (Redis lock, or a status + expiry column) while the user pays, a conditional update in a relational database as the final guard, a virtual waiting queue for hot events, Elasticsearch fed by CDC for search, and aggressive caching of event pages and seat maps.',
+  intro: 'Scope: users view an event with its seat map, search events, and book tickets; adding events is an admin feature you can leave out. The NFRs split by feature, which is the CAP point interviewers want: search and event pages must be highly available and fast (search under ~500 ms), while booking must be strongly consistent so no seat is ever sold twice. Reads dwarf writes (~100:1, about 1% of viewers book), and hot events bring surges of 10–100 million users for 10–100 thousand seats. Booking is two-phase: reserve a seat with a 10-minute Redis hold (SET NX EX), then confirm after payment with a guarded UPDATE in Postgres. Around that sit a virtual waiting queue for hot events, Elasticsearch with cached queries for search, and heavy caching of event data with live seat updates over SSE.',
   options: {
     'Seat hold with TTL': {
       eli5: 'At a sari shop, the shopkeeper keeps your chosen sari aside for 10 minutes while you fetch money. If you don’t come back, it goes back on the shelf by itself, no argument needed.',
       industry: [
-        'Redis SET seat:{showId}:{seatId} userId NX EX 600 when a user picks a seat.',
-        'A status + hold_expires_at column: a seat is free if AVAILABLE, or HELD with an expiry in the past.',
+        'Redis SET hold:{ticketId} {userId} NX EX 600 on reserve; NX makes it a lock, EX makes it end on time without any cleanup job.',
+        'The seat map is “tickets AVAILABLE in Postgres minus ticket IDs with a live Redis hold”, so the DB only stores AVAILABLE or BOOKED.',
         'BookMyShow, Ticketmaster and airline checkouts showing a countdown (“complete payment in 8:59”).',
       ],
-      def: 'When a user selects seats, place a short, automatically expiring hold before asking for payment, so they don’t type card details only to learn the seat is gone. In Redis, SET NX with an expiry acquires the hold atomically and frees it on timeout; for several seats, acquire in a fixed order (or one Lua script) and release all on failure. A database alternative treats “HELD with expired timestamp” as available, so correctness never depends on a cleanup cron. Holds only improve the user experience; the final database write still enforces “one seat, one booking”.',
+      def: 'Booking is two-phase: POST /booking/reserve places a short, automatically expiring hold, then PUT /booking/confirm takes payment and books. The hold lives in Redis, not in booking-service memory, because the service runs on many instances. SET NX EX acquires it atomically and expires it exactly on time. A cron that releases RESERVED rows every 10 minutes is late by up to a full interval (a 10-minute hold can last 19), and a status + reserved_at column treated as “stale means free” works but muddles every query. For several seats, acquire in one Lua script or in seat-ID order and release all on failure. Holds only protect the user experience; the final DB write still enforces “one seat, one booking”.',
       scenarios: [
         'Users need several minutes to pay after choosing seats',
-        'Abandoned checkouts must free seats promptly, not after a cron sweep',
+        'Abandoned checkouts must free seats on time, not after a cron sweep',
+        'The booking service is horizontally scaled, so holds can’t live in its memory',
         'Many users click the same seat in the same second',
       ],
-      scale: 'One Redis op per seat selected; 10 minute TTLs. With a cron releasing holds every few minutes, hot seats sit locked long after the user left.',
+      scale: 'One Redis op per seat reserved, 10-minute TTL; a single Redis node handles ~100K ops/s. Losing Redis loses holds for at most 10 minutes; it never causes double booking.',
     },
     'Conditional DB update for final booking': {
       eli5: 'The final ticket register at the cinema has one line per seat. The clerk only writes your name if that line is still blank; if someone else’s name is already there, you’re refused.',
       industry: [
-        'Postgres: UPDATE tickets SET status = ‘BOOKED’, booking_id = ? WHERE id = ? AND status <> ‘BOOKED’, checking rows affected.',
-        'Optimistic concurrency with a version column on each ticket row.',
-        'Bookings and tickets in one relational database for ACID transactions across a multi-seat order.',
+        'Postgres: UPDATE tickets SET status = ‘BOOKED’, user_id = ? WHERE id = ? AND status = ‘AVAILABLE’, then check rows affected.',
+        'Stripe payment intent on confirm; the webhook marks the booking BOOKED, and a loser of the race is refunded.',
+        'Bookings and tickets in one relational database, sharded by event_id, for ACID across a multi-seat order.',
       ],
-      def: 'The source of truth is a tickets table with one row per seat per show. Confirming a booking runs a short ACID transaction that moves each ticket to BOOKED only if it isn’t already booked (conditional update or version check) and creates the booking row; if any seat fails, the whole booking rolls back. This guarantees no double booking even if Redis loses a hold, a TTL expires mid-payment or two services race. Avoid long SELECT … FOR UPDATE locks held during payment; keep the locked section to milliseconds.',
+      def: 'The source of truth is a tickets table with one row per seat per event. Confirming runs a short ACID transaction that moves each ticket to BOOKED only if it is still AVAILABLE and creates the booking row; if any seat fails, the whole booking rolls back. This guarantees no double booking even if Redis loses a hold, a TTL expires mid-payment, or two services race: the first to pay wins and the other gets an error and a refund. That bad experience is rare and acceptable, a product trade-off worth saying aloud. Never hold SELECT … FOR UPDATE locks during payment; keep the locked section to milliseconds.',
       scenarios: [
         'Double booking is unacceptable under any failure',
         'A multi-seat order must be all-or-nothing',
-        'The hold layer (Redis) might fail or expire early',
+        'The hold layer (Redis) might crash or expire early',
       ],
-      scale: 'Bookings are ~1% of traffic; one Postgres primary handles thousands of short booking transactions per second, and shows can be sharded by event ID.',
+      scale: 'Bookings are ~1% of traffic; one Postgres primary handles thousands of short booking transactions per second. Shard by event_id only when the numbers say so.',
     },
     'Virtual waiting queue': {
       eli5: 'For a popular temple darshan, you get a token number at the gate and wait in a hall with a screen showing “now serving 4,120”. Only a few hundred are let into the inner hall at a time.',
       industry: [
-        'Ticketmaster and BookMyShow queues for big concerts and IPL finals.',
-        'A Redis sorted set ordered by arrival time, admitting batches into an admitted:{eventId} set with a TTL.',
-        'Position and estimated wait pushed over SSE/WebSocket so users don’t refresh.',
+        'Ticketmaster queues for Taylor Swift and BookMyShow queues for Coldplay and IPL finals, switched on by an admin only for hot events.',
+        'A Redis sorted set scored by arrival time (or a random score at sale start, for fairness), admitting batches as seats sell.',
+        'Position and estimated wait pushed over SSE, so users don’t refresh and add load.',
       ],
-      def: 'For hot events, don’t let millions of users hit the seat map and booking service at once. Put them in a queue ordered by arrival (or randomised at sale start for fairness), and admit a controlled batch at a time, issuing a short-lived admission token that the booking service checks. Admitted users see a seat map that is still meaningful; everyone else sees their position and an estimated wait. It turns an uncontrolled spike into a steady flow your booking path is sized for.',
+      def: 'For hot events, don’t let millions of users reach the seat map and booking service at once. Put them in a queue and admit a controlled batch at a time, giving each admitted user a short-lived token that the booking service checks. Admitted users see a seat map that still means something; everyone else sees their position. The queue is a deliberate choke point: it turns an uncontrolled spike into a steady flow your booking path is sized for, and it also fixes the user experience of every click hitting an already-held seat.',
       scenarios: [
         'Ten million fans arrive for 50,000 seats at 10:00 sharp',
-        'Seat maps go stale within seconds under contention',
+        'Every seat a user clicks is already held by someone else',
         'The booking service must be protected from the spike',
       ],
-      scale: 'Admit maybe 1–5K users per minute per event; queue state is tiny (one sorted-set entry per user), so even 10M entries fit in a Redis cluster.',
+      scale: 'Admit a few thousand users per minute per event; one sorted-set entry per user, so even 10M waiting users fit easily in a Redis cluster.',
     },
-    'Elasticsearch fed by CDC': {
-      eli5: 'The library’s main register is the truth, but readers search a card catalogue copied from it. A helper copies every new entry to the catalogue a few seconds later.',
+    'Elasticsearch with cached search': {
+      eli5: 'The library’s main register is the truth, but readers search a card catalogue copied from it. The front desk also keeps a slip with answers to the ten questions everyone asks.',
       industry: [
-        'Searching events by title, artist, venue, city and date with fuzzy matching (“Arijit Sing”).',
-        'Debezium or DynamoDB Streams pushing event changes into Elasticsearch.',
-        'Geo filters for “shows near me” and facets for language, genre and format (IMAX, 3D).',
+        'Searching events by name, performer, venue, city and date with typo tolerance (“Arijit Sing”) and geo filters for “near me”.',
+        'Events kept in sync from Postgres by CDC (Debezium) or by the app writing to both.',
+        'Popular searches cached: Elasticsearch’s node query cache, Redis keyed by the normalised query, or the CDN caching the search API for 30–60 seconds.',
       ],
-      def: 'LIKE ‘%keyword%’ queries scan the whole events table and can’t meet a ~500 ms target or handle typos. Keep events in the relational database and replicate them to a search engine with an inverted index through change data capture, accepting seconds of lag. Search returns event IDs and summary fields; seat availability is never read from the search index. Postgres full-text (tsvector + GIN) is a lighter option at small scale.',
+      def: 'LIKE ‘%term%’ scans the whole events table and can’t meet a ~500 ms target or handle typos. Replicate events into Elasticsearch (inverted index, geo queries) and accept seconds of lag. It is not the primary store: it lacks transactions and its durability is weaker. Search returns event summaries only; seat availability is never read from the index. For repeated queries, add a cache; a CDN cache helps only when the query space is small, not for raw latitude/longitude or personalised results.',
       scenarios: [
         'Users search by partial names, typos and several filters at once',
         'Search must stay fast even while bookings hammer the main DB',
-        'A few seconds of lag for newly added shows is fine',
+        'The same few searches repeat thousands of times a minute',
       ],
-      scale: 'Events are few (millions) and change rarely, so the index is small; the load is query volume, handled with replicas and caching of common searches.',
+      scale: 'Events are few (millions) and change rarely, so the index is small; the load is query volume, handled with replicas and a 30–60 s cache of common searches.',
     },
-    'Cache for event pages and seat maps': {
-      eli5: 'The cinema prints the film poster and timings once and sticks them outside, instead of the manager answering each passer-by. Only the seat chart is redrawn every few seconds.',
+    'Cached event data + SSE seat map': {
+      eli5: 'The cinema prints the film poster and timings once and sticks them outside, instead of the manager answering each passer-by. Only the seat chart is redrawn live as seats go.',
       industry: [
-        'Event, venue and artist details in Redis/CDN with long TTLs (hours).',
-        'Seat availability cached for a few seconds, or pushed as deltas over SSE to open seat maps.',
-        'Stateless event services behind a load balancer, scaled horizontally before a big sale.',
+        'Event, venue and performer details in Redis and the CDN with long TTLs, invalidated on admin edits.',
+        'Tickets not cached: availability comes from the DB and Redis holds, with changes pushed to open seat maps over Server-Sent Events.',
+        'Stateless event services behind an API gateway, autoscaled before a big sale.',
       ],
-      def: 'Most traffic is reads of data that barely changes: event descriptions, posters, venue layouts. Cache them at the CDN and in Redis with long TTLs, and invalidate on edits. Seat availability changes fast, so cache it briefly or push changes, and accept that it may be a few seconds stale: the hold and the final booking write will catch conflicts. This is where “availability for browsing” is implemented.',
+      def: 'Most traffic reads data that rarely changes: event descriptions, posters, venue layouts. Cache it heavily and invalidate on edits. Seat availability changes every second, so don’t cache it for long; push changes to open seat maps instead. SSE fits because updates only flow server to client; WebSocket is two-way and more than needed, and long polling is fine only if users leave the page quickly. Any view that is still a little stale is caught by the hold and the final guarded write.',
       scenarios: [
         'Read:write ratio around 100:1',
         'A trailer drop sends millions to one event page',
-        'Seat maps can be a few seconds stale',
+        'Users keep clicking seats that were taken seconds ago',
       ],
-      scale: 'A CDN serves static event pages at millions of requests per second; Redis serves ~100K reads/s per node for dynamic availability.',
+      scale: 'A CDN serves static event pages at millions of requests per second; one SSE server holds tens of thousands of open connections.',
     },
   },
   scenarios: [
     (pick) => {
       const ev = pick(['an IPL final', 'a Coldplay concert in Mumbai', 'a Rajinikanth first-day show']);
+      const users = pick(['10 million', '20 million', '5 million']);
       return {
-        q: `Interviewer: “Design BookMyShow; assume ${ev} is on sale.” You state NFRs: search under 500 ms, reads ~100× bookings, availability for browsing, and “never sell one seat twice”. Which component is the final enforcer of that last NFR, regardless of what any cache or hold says?`,
+        q: `Interviewer: “Design BookMyShow; ${ev} goes on sale at 10:00.” You list NFRs: search under 500 ms, reads ~100× bookings, ${users} users may arrive for about 50,000 seats, browsing always up, and “never sell one seat twice”. Which component is the final enforcer of that last NFR, whatever any cache or hold says?`,
         answer: 'Conditional DB update for final booking',
         hint: 'Holds and caches can be wrong. What can’t be?',
         steps: [
-          'Caches and seat maps can be stale; that’s acceptable for browsing.',
-          'Holds improve the user experience but can expire or be lost.',
-          'The ACID transaction that moves tickets to BOOKED only if not already booked is the true guard.',
-          'So consistency is required at this one write; everything else favours availability.',
+          'Caches and seat maps can be seconds stale; that is fine for browsing, which favours availability.',
+          'Holds improve the experience but can expire, or vanish if Redis fails.',
+          'The ACID transaction that books a ticket only WHERE status = ‘AVAILABLE’ is the real guard.',
+          'So strong consistency is required at this one write, and the rest of the system can favour availability.',
         ],
         followups: [
-          { q: 'Why is “consistency vs availability” answered per feature here?', options: ['Browsing can be stale and always up; booking must be correct even if it sometimes errors', 'CAP forces one global answer', 'Booking needs availability more than search', 'Neither matters for tickets'], why: 'Scope NFRs to the part of the system they protect.' },
-          { q: 'Why not hold a SELECT … FOR UPDATE lock during the 5–10 minute payment?', options: ['Long-held row locks cause contention, deadlocks and stuck locks after crashes', 'Postgres doesn’t support row locks', 'It would double-book seats', 'Locks are only for NoSQL'], why: 'Keep the database lock to the milliseconds of the final write.' },
+          { q: 'Why is “consistency vs availability” answered per feature here?', options: ['Browsing can be slightly stale and must stay up; booking must be correct even if it sometimes errors', 'CAP forces one answer for the whole system', 'Booking needs availability more than search does', 'Neither matters for ticketing'], why: 'Scope each NFR to the part of the system it protects.' },
+          { q: `${users} users for 50,000 seats. Which NFR does that number add?`, options: ['Survive sudden surges for hot events without the booking path falling over', 'Store petabytes of ticket data', 'Very low write latency for every booking', 'Multi-region strong consistency'], why: 'Demand far beyond supply is a spike-handling NFR, not a storage one.' },
+          { q: 'Why not hold a SELECT … FOR UPDATE lock during the 5–10 minute payment?', options: ['Long-held row locks cause contention and stuck locks after crashes', 'Postgres doesn’t support row locks', 'It would double-book seats', 'Row locks only work in NoSQL'], why: 'Keep database locks to the milliseconds of the final write.' },
         ],
       };
     },
     (pick) => {
       const pct = pick(['18%', '25%', '12%']);
       return {
-        q: `Users choose seats, enter payment details, and only then does the booking call discover the seat was taken; ${pct} of payment attempts for popular shows end this way. A later fix marks seats RESERVED with a cron job that frees them every 5 minutes, but now seats look taken long after users abandon checkout.`,
+        q: `Users pick seats, enter payment details, and only then learn the seat was taken; ${pct} of payment attempts for popular shows end this way. A first fix marks seats RESERVED and a cron frees them every 10 minutes, but some holds now last 19 minutes and abandoned seats look taken long after users leave. The booking service runs on 12 instances.`,
         answer: 'Seat hold with TTL',
         hint: 'Claim the seat before payment, and let the claim end on time by itself.',
         steps: [
-          'The seat must be claimed when selected, not when payment completes.',
-          'Use a hold that expires automatically at exactly 10 minutes (Redis SET NX EX, or status + expiry column).',
-          'Treat expired holds as available at read time, so no cron is needed for correctness.',
-          'The final conditional update still guards against any race.',
+          'Claim the seat at reserve time, not when payment completes.',
+          'Put the hold in Redis, shared by all 12 instances, with SET hold:{ticketId} userId NX EX 600.',
+          'The key expires exactly at 10 minutes; no cron is involved in correctness.',
+          'The seat map is DB AVAILABLE minus live holds, and the final guarded UPDATE still catches any race.',
         ],
         followups: [
-          { q: 'A hold expires while the user’s payment is still processing and someone else books the seat. What happens?', options: ['The first booking’s final write fails, so refund the payment automatically; extend the hold when payment starts to make this rare', 'Both get the seat', 'Cancel the second user', 'It can’t happen'], why: 'The DB guard decides; refunds handle the rare loser.' },
-          { q: 'Redis holds are in a plain set and expired ones still show as taken on the seat map. Fix?', options: ['Use a sorted set scored by expiry and drop entries with score < now on read', 'Restart Redis hourly', 'Never expire holds', 'Show all seats as free'], why: 'Per-key TTLs don’t clean up members of a set; score by expiry instead.' },
+          { q: 'Why SET … NX EX rather than a plain SET followed by EXPIRE?', options: ['It checks, sets and adds the expiry in one atomic step, so two users can’t both win and no hold lives forever', 'Plain SET is slower', 'EXPIRE doesn’t exist in Redis', 'NX encrypts the value'], why: 'Without NX a second user overwrites the hold; a crash between SET and EXPIRE leaves a hold that never expires.' },
+          { q: 'A hold expires while the user’s payment is still processing and someone else books the seat. What happens?', options: ['The first user’s guarded UPDATE fails, so refund them; extend the hold when payment starts to make this rare', 'Both users get the seat', 'Cancel the second user’s booking', 'It can’t happen'], why: 'The DB guard decides; refunds handle the rare loser.' },
+          { q: 'A family reserves 4 seats one at a time and the third fails. What should the hold logic do?', options: ['Release the two it took (or grab all four in one Lua script) and say which seat is gone', 'Keep the two holds for 10 minutes', 'Retry the third seat forever', 'Book the two seats anyway'], why: 'Partial holds block seats nobody will buy.' },
+        ],
+      };
+    },
+    (pick) => {
+      const seat = pick(['F12', 'C7', 'K3']);
+      return {
+        q: `At 20:00 the Redis node holding seat holds crashes and restarts empty. Two users who were mid-checkout both go on to pay for seat ${seat}, and a third user now reserves it too. The team asks how you stop the seat being sold twice.`,
+        answer: 'Conditional DB update for final booking',
+        hint: 'Which layer never forgets?',
+        steps: [
+          'Holds were lost, so for up to 10 minutes several users can believe they hold the seat.',
+          'Each confirm runs UPDATE tickets SET status = ‘BOOKED’ WHERE id = ? AND status = ‘AVAILABLE’.',
+          'Only the first succeeds (1 row); the others see 0 rows, the booking rolls back and their payments are refunded.',
+          'Correctness never depended on Redis, only the user experience did.',
+        ],
+        followups: [
+          { q: 'Is “first to pay wins, the other gets an error” acceptable?', options: ['Yes, it is rare and safe; a product decision to accept briefly worse UX over adding a strongly consistent lock service', 'No, it is double booking', 'No, so make Redis the source of truth', 'Yes, because nobody notices'], why: 'Name the trade-off: rare bad UX, never a wrong sale.' },
+          { q: 'Why not move holds into the booking service’s memory to avoid Redis failures?', options: ['Instances are horizontally scaled, so each would see different holds', 'Java can’t store maps', 'Memory is slower than Redis', 'It would make search slower'], why: 'Shared state for many instances belongs in a shared store.' },
         ],
       };
     },
@@ -124,68 +146,72 @@ SG.add({
       const users = pick(['10 million', '5 million', '15 million']);
       const seats = pick(['50,000', '35,000', '80,000']);
       return {
-        q: `${users} users open the app within 2 minutes of tickets going on sale for ${seats} seats. Seat maps refresh constantly but every seat a user clicks is already held. The booking service is at 100% CPU and users rage-refresh, making it worse.`,
+        q: `${users} users open the app within 2 minutes of tickets going on sale for ${seats} seats. Seat maps now update live over SSE, yet every seat a user clicks is already held. The booking service is at 100% CPU and users rage-refresh, making it worse.`,
         answer: 'Virtual waiting queue',
         hint: 'Control how many people are inside the shop at once.',
         steps: [
-          'Far more users than seats arrive at once; letting all of them pick seats is chaos.',
-          'Put users in a queue (Redis sorted set by arrival time) before the seat map.',
-          'Admit batches with a short-lived admission token that booking checks.',
+          'Demand is hundreds of times supply; letting everyone pick seats at once is chaos.',
+          'An admin enables the queue for this event: a Redis sorted set before the seat map.',
+          'Admit batches as seats sell, each with a short-lived admission token that booking checks.',
           'Push position and estimated wait over SSE so users stop refreshing.',
         ],
         followups: [
-          { q: 'Why is real-time seat updates over SSE alone not enough here?', options: ['Seats still vanish within milliseconds; the problem is too many contenders, not stale data', 'SSE doesn’t work on mobile', 'SSE is slower than polling', 'It is enough'], why: 'Fresh data doesn’t help when demand is 200× supply.' },
+          { q: 'Why are live seat updates alone not enough here?', options: ['Seats still go within milliseconds; the problem is too many contenders, not stale data', 'SSE doesn’t work on mobile', 'SSE is slower than polling', 'They are enough'], why: 'Fresh data doesn’t help when demand is 200× supply.' },
+          { q: 'Users who opened the app at 09:59 complain that people who arrived at 10:00 got in first. What queue ordering is fairest at sale start?', options: ['Give everyone present at opening a random position, then order later arrivals by time', 'Order strictly by request timestamp', 'Let premium users skip the queue silently', 'Sort by user ID'], why: 'Network luck at the opening second isn’t fair; randomise that first cohort.' },
         ],
       };
     },
     (pick) => {
       const typo = pick(['“Arijit Sing live”', '“kalki 2898 imax”', '“standup comedy bandra”']);
       return {
-        q: `Users search ${typo}. The current search runs SELECT … WHERE title LIKE ‘%…%’ on the events table in the booking Postgres primary. It takes 2–4 seconds, misses typos, and slows down bookings when traffic spikes.`,
-        answer: 'Elasticsearch fed by CDC',
-        hint: 'A different index type, off the booking database.',
+        q: `Users search ${typo}. Search runs SELECT … WHERE name LIKE ‘%…%’ on the events table in the booking Postgres primary. It takes 2–4 seconds, misses typos, and slows bookings when traffic spikes. The NFR is search under 500 ms.`,
+        answer: 'Elasticsearch with cached search',
+        hint: 'A different kind of index, away from the booking database.',
         steps: [
-          'Leading-wildcard LIKE can’t use a B-tree index and scans everything.',
-          'An inverted index supports keyword, fuzzy and filtered queries quickly.',
-          'Replicate events to Elasticsearch via CDC; seconds of lag are fine.',
+          'A leading-wildcard LIKE can’t use a B-tree index, so it scans every row.',
+          'An inverted index answers keyword, fuzzy and filtered queries in milliseconds.',
+          'Sync events to Elasticsearch through CDC; a few seconds of lag is fine.',
           'Search load no longer touches the booking primary.',
         ],
         followups: [
-          { q: 'Should search results show live seat counts from Elasticsearch?', options: ['No: availability changes too fast; read it from the booking system or a short-TTL cache on the event page', 'Yes, update Elasticsearch on every hold', 'Yes, search is the source of truth', 'Only for sold-out shows'], why: 'Keep fast-changing, consistency-sensitive data out of the search index.' },
+          { q: 'Should search results show live seat counts from Elasticsearch?', options: ['No: availability changes too fast; read it from the booking system on the event page', 'Yes, update Elasticsearch on every hold', 'Yes, search is the source of truth', 'Only for sold-out shows'], why: 'Keep fast-changing, consistency-critical data out of the search index.' },
+          { q: 'Why not make Elasticsearch the only store for events and tickets?', options: ['No transactions and weaker durability; keep Postgres as the source of truth', 'It can’t store text', 'It is slower than LIKE', 'It can’t run on Linux'], why: 'Search engines are derived indexes, not systems of record.' },
         ],
       };
     },
     (pick) => {
-      const trailer = pick(['a trailer launch', 'a celebrity tweet', 'a cricket semi-final result']);
+      const q = pick(['“concerts in Mumbai this weekend”', '“movies near me today”', '“IPL tickets”']);
+      const n = pick(['40,000', '80,000', '25,000']);
       return {
-        q: `After ${trailer}, 2 million users per minute open the same event page. Each page load reads the event, venue, artist and seat layout from Postgres. Reads are 100× bookings, and the primary’s CPU spike delays booking transactions for other shows.`,
-        answer: 'Cache for event pages and seat maps',
-        hint: 'Most of that page hasn’t changed in weeks.',
+        q: `Search for ${q} now arrives ${n} times a minute during a big sale, and the Elasticsearch cluster’s CPU is at 85%. Results only need to be about a minute fresh, and the same handful of queries make up most traffic.`,
+        answer: 'Elasticsearch with cached search',
+        hint: 'Most of these requests ask the exact same question.',
         steps: [
-          'Event, venue and artist data are static; serve them from a CDN/Redis with long TTLs.',
-          'Seat availability gets a short TTL or pushed updates, and may be seconds stale.',
-          'Holds and the final conditional write catch any stale view.',
-          'Postgres is left for the small share of booking writes.',
+          'The query mix is repetitive and a minute of staleness is acceptable.',
+          'Cache results in Redis keyed by the normalised query (or let the CDN cache the search API for 30–60 s).',
+          'Elasticsearch’s own node query cache also helps repeated filters.',
+          'Only cache misses reach the cluster, so CPU falls sharply.',
         ],
         followups: [
-          { q: 'When an organiser changes the show time, how do caches learn?', options: ['Invalidate the cached keys on update (or via CDC), with TTL as a backstop', 'Wait for the 24 h TTL', 'Restart the CDN', 'Users must clear their cache'], why: 'Event-driven invalidation plus TTL keeps rarely changing data fresh enough.' },
+          { q: 'When does CDN caching of search results stop working?', options: ['When queries carry raw latitude/longitude or are personalised, so almost no two are identical', 'When results are JSON', 'When the CDN is in India', 'When there are more than 100 events'], why: 'High-cardinality keys give a near-zero hit rate; round the location or cache by city instead.' },
         ],
       };
     },
     (pick) => {
-      const n = pick(['four', 'six', 'two']);
+      const trigger = pick(['a trailer launch', 'a celebrity tweet', 'a cricket semi-final result']);
       return {
-        q: `A family books ${n} adjacent seats. The service holds them one at a time in Redis; the third hold fails because someone else grabbed that seat, but the first two stay held for 10 minutes and the family’s booking errors out.`,
-        answer: 'Seat hold with TTL',
-        hint: 'A multi-seat hold should behave like one hold.',
+        q: `After ${trigger}, 2 million users a minute open the same event page. Each load reads event, venue, performer and all tickets from Postgres, and the seat map polls every 30 seconds, so users keep clicking seats that went 20 seconds ago. The primary’s CPU spike delays bookings for other shows.`,
+        answer: 'Cached event data + SSE seat map',
+        hint: 'Most of that page hasn’t changed in weeks; the rest changes every second.',
         steps: [
-          'Partial holds block seats nobody will buy.',
-          'Acquire all holds in one atomic Lua script on one node (or in seat-ID order, releasing all on failure).',
-          'Return a clear “some seats taken” so the user can pick again.',
-          'The final booking transaction still commits all seats or none.',
+          'Event, venue and performer data barely change: serve them from Redis and the CDN with long TTLs.',
+          'Tickets are not cached; changes to availability are pushed to open seat maps over SSE.',
+          'Polling stops, so Postgres load drops and maps are close to live.',
+          'Holds and the guarded final write catch whatever is still stale.',
         ],
         followups: [
-          { q: 'Why acquire seat holds in a fixed order across users?', options: ['It prevents two users each holding half of the other’s seats and both failing (deadlock-like)', 'Redis requires sorted keys', 'It speeds up payment', 'Order doesn’t matter'], why: 'Consistent ordering avoids circular waits.' },
+          { q: 'Why SSE rather than WebSocket for the seat map?', options: ['Updates flow only server to client; SSE is simpler over plain HTTP, and WebSocket’s two-way channel isn’t needed', 'WebSocket can’t send JSON', 'SSE supports more browsers than HTTP', 'WebSocket is always slower'], why: 'Pick the simplest channel that matches the direction of data.' },
+          { q: 'An organiser changes the show time. How do caches learn?', options: ['Invalidate the cached keys on update (or via CDC), with TTL as a backstop', 'Wait for the 24-hour TTL', 'Restart the CDN', 'Ask users to clear their cache'], why: 'Event-driven invalidation plus TTL keeps rarely changing data fresh enough.' },
         ],
       };
     },

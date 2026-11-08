@@ -5,7 +5,7 @@ SG.add({
   title: 'LLD: Splitwise and LRU cache',
   short: 'Splitwise and LRU',
   blurb: 'Split strategies, a balance sheet that simplifies debts, and an O(1) LRU cache made thread-safe.',
-  intro: 'Splitwise tests modelling and money correctness: User, Group, Expense, Split and a balance sheet. The split type is a Strategy, balances live in a nested map, and “simplify debts” is a greedy netting algorithm. LRU cache tests data structures: O(1) get and put need a HashMap for lookup plus a doubly linked list for recency, or Java’s LinkedHashMap in access order, and then the follow-up is always “make it thread-safe”.',
+  intro: 'Splitwise tests modelling and money correctness: User, Group, Expense, Split and a per-user balance sheet, behind a single GroupService that talks to a GroupRepository interface. The split type is a Strategy that returns a list of splits, balances live in a map per user per group, and “simplify debts” is a greedy netting algorithm with two heaps. LRU cache tests data structures: O(1) get and put need a HashMap for lookup plus a doubly linked list for recency, or Java’s LinkedHashMap in access order, and then the follow-up is always “make it thread-safe”.',
   options: {
     'Strategy for split types': {
       eli5: 'Four friends share a ₹2,000 dinner: split equally, by exact amounts, or by percentage. Same bill, different rule for dividing it.',
@@ -14,7 +14,7 @@ SG.add({
         'Each SplitStrategy validates its own input (exact amounts must sum to the total, percentages to 100).',
         'PhonePe/Paytm bill-split features reuse the same idea for group payments.',
       ],
-      def: 'Define SplitStrategy with validate(expense) and computeShares(total, participants, params). EqualSplit, ExactSplit and PercentSplit implement it; ExpenseService picks one from an enum via a small factory. Use BigDecimal or integer paise, and give the rounding remainder to one participant so shares always sum to the total.',
+      def: 'Define SplitStrategy.split(total, participants, metadata) returning List<Split>, where each Split is (user, amount); EqualSplit, ExactSplit and PercentSplit implement it and validate their own input. Expense stores that List<Split> rather than a bare participant list, because a split says who and how much. ExpenseService picks the strategy from a SplitType enum via a factory or EnumMap. Use BigDecimal or integer paise, and give the rounding remainder to one participant so shares always sum to the total.',
       scenarios: [
         'New split types (by shares, by item) are planned',
         'Each split type has different validation rules',
@@ -29,7 +29,7 @@ SG.add({
         'Balances kept as Map<userId, Map<userId, amount>> or a net balance per user.',
         'Settlement apps net trips with 6 friends and 40 expenses into 4–5 UPI transfers.',
       ],
-      def: 'Keep a balance sheet updated on every expense: for each share, payer is owed and participant owes. To simplify, compute each user’s net balance, then greedily match the largest creditor with the largest debtor (two heaps), settle the smaller amount, and repeat. This gives at most n−1 transfers; the true minimum is NP-hard, so the greedy is the accepted answer.',
+      def: 'Each group keeps a BalanceSheet per user — totalPaid, totalExpense (their own share) and a Map<User, amount> where the sign says who owes whom — updated on every expense; zero entries are removed. To simplify, compute each user’s net, drop zeros, then greedily settle the largest debtor against the largest creditor (two heaps), pushing back any remainder. This gives at most n−1 transfers; the exact minimum needs factorial search, so the greedy is the accepted answer. One-to-one expenses outside a group are only netted within each pair.',
       scenarios: [
         'Users want to see “who owes whom” per pair',
         'A group needs the fewest payments to settle up',
@@ -94,7 +94,7 @@ SG.add({
         steps: ['The algorithm for computing shares is what varies.', 'Define SplitStrategy with validate() and computeShares().', 'Map the SplitType enum to strategies in a small factory or EnumMap.', 'New split types are new classes; ExpenseService stays closed.'],
         followups: [
           { q: 'Splitting ₹100 equally among 3 users. What is the correct handling?', options: ['Work in paise and give the 1-paisa remainder to one user so shares sum to ₹100', 'Use double and round each share to 2 decimals', 'Charge each ₹33.33 and drop the rest', 'Throw an error for amounts not divisible by 3'], why: 'Money must reconcile exactly; doubles and naive rounding leak paise.' },
-          { q: 'Where should “percentages must add to 100” be checked?', options: ['Inside PercentSplit.validate()', 'In the controller for all split types', 'In the User class', 'Nowhere; trust the client'], why: 'Each strategy owns the rules specific to it.' },
+          { q: 'What should the strategy return and Expense store: List<User> participants or List<Split>?', options: ['List<Split> (user + amount), so each share is recorded with its owner', 'List<User>, recomputing shares whenever balances are shown', 'A Map<String, Double> of names to shares', 'Only the total and the split type'], why: 'Unequal and percentage splits cannot be recomputed from a user list alone; a Split carries who and how much.' },
         ],
       };
     },
@@ -160,6 +160,19 @@ SG.add({
         steps: ['Pairwise amounts are needed instantly.', 'Keep Map<userId, Map<userId, Long>> updated on each expense.', 'Positive means owed to you, negative means you owe.', 'Net and simplify from the same sheet when settling.'],
         followups: [
           { q: 'Which Java call updates a pair’s balance atomically in a ConcurrentHashMap<String, Long>?', options: ['map.merge(key, delta, Long::sum)', 'map.put(key, map.get(key) + delta)', 'map.putIfAbsent(key, delta)', 'map.replace(key, delta)'], why: 'merge is atomic per key; get-then-put races.' },
+        ],
+      };
+    },
+    (pick) => {
+      const n = pick([22, 25, 40]);
+      return {
+        q: `A ${n}-person office offsite group has 120 expenses. A teammate replaced the settle-up logic with a backtracking search for the exact minimum number of payments; it now takes minutes and the API times out. The PM still wants few transfers, returned in under a second.`,
+        answer: 'Balance sheet with debt simplification',
+        hint: 'Exact versus fast enough.',
+        steps: ['Exact minimisation explores orderings, roughly factorial in the number of people; past ~20 it is unusable.', 'Compute nets from the balance sheets and drop users at zero.', 'Max-heap of creditors, min-heap of debtors: settle the biggest pair, push back the remainder.', 'O(n log n), at most n−1 transfers, accepted as good enough.'],
+        followups: [
+          { q: 'Asha and Ravi share one-to-one expenses, and so do Ravi and Meena, outside any group. Should simplify-debts tell Asha to pay Meena directly?', options: ['No; outside a group only net within each pair, since Asha and Meena may not know each other', 'Yes; fewer transfers always wins', 'Yes, but only above ₹500', 'Only if Ravi approves by default'], why: 'Rerouting money between strangers is a product problem; group simplification assumes members know each other.' },
+          { q: 'GroupService does new InMemoryGroupRepository() today, and MySQL is coming. Cleanest change?', options: ['Depend on a GroupRepository interface injected via the constructor', 'Add if (useSql) branches inside GroupService', 'Make InMemoryGroupRepository extend a SQL class', 'Make the repository a static Singleton'], why: 'Dependency inversion lets you swap the storage without editing the service.' },
         ],
       };
     },
