@@ -14,7 +14,7 @@ SG.add({
         'Preloading the sale’s inventory count into Redis before the start.',
         'A relational backstop: UPDATE inventory SET qty = qty − 1 WHERE sku = ? AND qty > 0 when the order is written.',
       ],
-      def: 'Database row locks on one inventory row can’t take a million concurrent updates. Load the stock count into Redis and run check-and-decrement as one Lua script: Redis runs scripts one at a time, so no two requests can both see the last unit. The script also records who holds the unit. Because Redis replication is asynchronous, a failover can lose recent decrements, so keep a final conditional update in the order database as the guard against overselling.',
+      def: 'Database row locks on one inventory row can’t take a million concurrent updates. Load the stock count into Redis and run check-and-decrement as one Lua script: Redis runs scripts one at a time, so no two requests can both see the last unit. The script also records who holds the unit. Because Redis replication is asynchronous, a failover can lose recent decrements, so keep a final conditional update in the order database as the guard against overselling. Alternatives lose: a queue as the gate adds delay and only per-partition order; ZooKeeper sequential nodes give strict order but are a low-throughput quorum-write system; multi-master (active-active) counters converge eventually, so two nodes can both see stock left.',
       scenarios: [
         'Zero overselling while a million users click at once',
         'Check-then-decrement must not race',
@@ -29,8 +29,9 @@ SG.add({
         'Routing a user to a shard by hash of user ID, and trying another shard if theirs is empty.',
         'Periodically rebalancing leftover units from slow shards to fast ones near the end of the sale.',
       ],
-      def: 'Even an atomic script on one key is limited by one Redis CPU core, and every request for the product is a hot key. Split the stock across N independent keys on different nodes and route each request to one shard (hash of user ID, or random). Each shard decrements atomically, so overselling is still impossible, and throughput grows with N. Handle the side effect: a shard can run out while others still have stock, so on “empty” try another shard (or rebalance) before telling the user it’s sold out.',
+      def: 'Even an atomic script on one key is limited by one Redis CPU core, and every request for the product is a hot key. Split the stock across N independent keys on different nodes and route each request to one shard (hash of user ID, or random). Each shard decrements atomically, so overselling is still impossible, and throughput grows with N. Handle the side effect: a shard can run out while others still have stock, so on “empty” try another shard (or rebalance) before telling the user it’s sold out. Routing by hash of user ID also makes “one unit per customer” cheap: all of a user’s requests land on one shard, where a local unique constraint on (sale, user) rejects the second buy, and a failed payment simply gives the unit back to that shard. The cost is approximate fairness: a user who clicked later may win on a less crowded shard.',
       scenarios: [
+        'One account must not buy two units of a limited drop',
         'One product’s stock key is the bottleneck at peak',
         'Throughput needed is several times one Redis node',
         'Users must not see “sold out” while units remain elsewhere',
@@ -116,6 +117,7 @@ SG.add({
           'Throughput scales with N, and the total sold can’t exceed the preloaded total.',
         ],
         followups: [
+          { q: 'Why is perfect first-come-first-served ordering usually dropped here?', options: ['Strict global order needs one serialising point, which caps throughput; sharding trades small unfairness for no oversell and speed', 'Fairness is illegal', 'Redis cannot order commands', 'Users prefer random winners'], why: 'Correctness (no oversell, no early sold-out) and latency come first; a few seconds of unfairness is accepted.' },
           { q: 'User A is routed to an empty shard while others have stock. What should happen?', options: ['Try another shard (or rebalance leftovers) before returning sold out', 'Tell them sold out', 'Let the shard go negative', 'Merge all shards back into one key'], why: 'Sharding must not create false “sold out” responses.' },
         ],
       };
@@ -150,6 +152,7 @@ SG.add({
           'Clients short-poll the cache every ~2 s until the link appears.',
         ],
         followups: [
+          { q: 'A teammate suggests putting every click into Kafka first and deciding winners in the consumers. Why is that wrong for the stock decision?', options: ['It adds queue delay that breaks the ~100 ms answer, and order holds only per partition; decide at the atomic counter, queue only the slow work after', 'Kafka loses messages by default', 'Kafka cannot handle 1M messages/s', 'Consumers cannot count'], why: 'Use the queue to smooth slow work, not to make the instant yes/no.' },
           { q: 'Why short polling rather than WebSockets for this wait?', options: ['The wait lasts seconds; holding a million persistent connections costs far more than cheap cached polls', 'WebSockets can’t send JSON', 'Polling is real-time', 'Browsers block WebSockets'], why: 'Pick the push channel only when the cost is justified.' },
         ],
       };
@@ -174,6 +177,24 @@ SG.add({
     },
     (pick) => {
       const units = pick(['1,000', '2,000', '500']);
+      const dup = pick(['40', '120', '65']);
+      return {
+        q: `The policy for a ${units}-unit drop is one unit per customer. Stock is already split across 10 Redis shards and requests are routed randomly. After the sale, ${dup} customers hold two units each because their two clicks landed on different shards, while some other customers were told “sold out”.`,
+        answer: 'Inventory sharded across keys',
+        hint: 'Where do a given user’s requests land, and where is the uniqueness check?',
+        steps: [
+          'Random routing scatters one user’s clicks over many shards, so no single shard can see the duplicate.',
+          'Route by hash of user ID so a user always hits the same shard.',
+          'Enforce uniqueness there with an atomic “has this user already bought?” check or a unique (sale, user) constraint.',
+          'On payment failure, return the unit to the same shard so the quota stays exact.',
+        ],
+        followups: [
+          { q: 'What is the NFR trade-off of hashing by user instead of random routing?', options: ['Load may be uneven and fairness only approximate, but duplicates are impossible', 'Slower reads', 'Less durability', 'More expensive CDN'], why: 'Locality of a user’s requests buys correctness; a hot shard may empty earlier.' },
+        ],
+      };
+    },
+    (pick) => {
+      const units = pick(['1,000', '2,000', '500']);
       const extra = pick(['37', '112', '19']);
       return {
         q: `A sneaker drop had ${units} pairs. The reserve endpoint does GET stock from Redis, checks it is above 0 in application code, then calls DECR. Load tests passed, but on launch day ${extra} more orders were accepted than there were pairs, and the counter ended negative.`,
@@ -186,6 +207,7 @@ SG.add({
           'Keep a conditional update in the order DB as a final backstop.',
         ],
         followups: [
+          { q: 'Why not use a ZooKeeper sequential-node counter instead of Redis?', options: ['It is strictly ordered but every write goes through a quorum, so throughput is far below the sale’s peak and few teams run it', 'It cannot count', 'It oversells by design', 'It only works for strings'], why: 'Consistency is fine; the write rate is the problem.' },
           { q: 'Redis fails over to a replica that missed the last few decrements. How do you still avoid overselling?', options: ['A conditional UPDATE … WHERE qty > 0 in the order database rejects the extra reservations', 'Trust the replica', 'Restart the sale', 'Disable replication'], why: 'Asynchronous replication can lose writes; the durable store has the last word.' },
         ],
       };

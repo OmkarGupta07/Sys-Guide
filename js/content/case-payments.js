@@ -5,7 +5,7 @@ SG.add({
   title: 'Design a UPI-style payment system',
   short: 'UPI payments',
   blurb: 'Payment intents, a strict state machine, bank callbacks, idempotency, a ledger and reconciliation.',
-  intro: 'Scope: a merchant or user creates a payment, the payer approves it, money moves through an external network (card networks for Stripe; for UPI, the payer’s PSP app → NPCI switch → payer’s bank, which debits after the UPI PIN, then the payee’s bank credits), and everyone learns the final status. The NFRs are unusual: correctness beats availability (no double debit, no lost rupee), every retry must be safe, the synchronous step should finish in a few seconds, and everything must be auditable for years. So the design is: a payment intent with an idempotency key, a state machine whose transitions are conditional writes, an append-only double-entry ledger, an outbox so webhooks are never lost, and status polling plus daily reconciliation, because the bank’s records, not yours, are the final truth.',
+  intro: 'Scope: a merchant or user creates a payment, the payer approves it, money moves through an external network (card networks for Stripe; for UPI, the payer’s PSP app → NPCI switch → payer’s bank, which debits after the UPI PIN, then the payee’s bank credits), and everyone learns the final status. The NFRs are unusual: correctness beats availability (no double debit, no lost rupee), every retry must be safe, the synchronous step should finish in a few seconds, and everything must be auditable for years. So the design is: a payment intent with an idempotency key, a state machine whose transitions are conditional writes, an append-only double-entry ledger, a transactional outbox so webhooks are never lost, a switch-routed flow where banks (not your app) hold the money, and status polling plus daily reconciliation, because the bank’s records, not yours, are the final truth.',
   options: {
     'Idempotency key with request fingerprint': {
       eli5: 'A cheque has a number. If the bank sees cheque 1047 a second time, it says “already paid” and shows you the old receipt instead of paying again. If someone writes a different amount on another cheque numbered 1047, the bank refuses it.',
@@ -29,11 +29,12 @@ SG.add({
         'UPI transactions moving through initiated → pending → success / failure / deemed-success, with pending resolved by later responses.',
         'UPDATE payments SET status = ‘SUCCESS’ WHERE id = ? AND status = ‘PENDING’ so late or duplicate callbacks change nothing.',
       ],
-      def: 'Model each payment as an intent with explicit states (created, pending, authorised, captured/success, failed, refunded) and allow only legal transitions. Every update is a conditional write on the expected current state, so duplicate, late or out-of-order callbacks from the bank or PSP can’t move a payment backwards or apply twice. Terminal states never change; a refund is a new linked object, not an edit. The intent lets the client and merchant always ask “what is the status?” instead of guessing.',
+      def: 'Model each payment as an intent with explicit states (created, pending, authorised, captured/success, failed, refunded) and allow only legal transitions. Every update is a conditional write on the expected current state, so duplicate, late or out-of-order callbacks from the bank or PSP can’t move a payment backwards or apply twice. Terminal states never change; a refund is a new linked object, not an edit. The intent lets the client and merchant always ask “what is the status?” instead of guessing. Write the status change and an outbox row for the merchant webhook in one local transaction, so a crash can never leave a captured payment with no notification (delivery is then at least once; merchants dedupe by event ID and verify an HMAC signature).',
       scenarios: [
         'A bank sends a failure callback after you already recorded success',
         'Callbacks can arrive twice or out of order',
         'A refund must not erase the original payment',
+        'The service crashes right after marking a payment captured',
       ],
       scale: 'Thousands of transitions per second, sharded by merchant or payment ID. Keep every raw bank/PSP response in an append-only events table for audits.',
     },
@@ -52,20 +53,20 @@ SG.add({
       ],
       scale: '~20K postings/s and ~200K balance reads/s is realistic for a big ledger: shard by account/tenant, serve reads from projections that report “as of sequence N”.',
     },
-    'Transactional outbox for webhooks': {
-      eli5: 'The cashier writes “tell customer order is ready” on the same bill as the sale. A runner reads the bills and makes the calls, so a call is never forgotten even if the cashier goes home.',
+    'Switch-routed bank-to-bank flow (no wallet float)': {
+      eli5: 'Like a cheque clearing house: you never hand cash to the delivery app. The clearing house asks your bank to pay and the shopkeeper’s bank to receive, and says “done” only when both banks agree.',
       industry: [
-        'Payment status update and outbox row inserted in one database transaction; Debezium (CDC) publishes the outbox to Kafka.',
-        'Stripe-style webhooks retried with backoff for days and signed with HMAC so merchants can verify them.',
-        'Merchants handling webhooks idempotently by event ID, because delivery is at least once.',
+        'UPI: payer’s PSP app → NPCI switch → payer’s (remitter) bank debit → payee’s (beneficiary) bank credit → final status back to both PSPs.',
+        'The switch resolves a VPA like name@bank to an account through the payee’s PSP, so the payer never types an account number or IFSC.',
+        'Wallets (PayPal, Alipay, Paytm wallet) are the opposite design: money sits in your balance first, so the app owns float, liability and licensing.',
       ],
-      def: 'Writing the payment status to the database and then publishing to Kafka is a dual write: a crash between them means the merchant never hears about a successful payment and never ships the order. Instead, insert the event into an outbox table in the same local transaction as the status change. A relay (CDC or poller) publishes outbox rows to the broker, and webhook workers deliver them with retries and signatures. Delivery is at least once, so merchants must deduplicate by event ID.',
+      def: 'A central switch routes each payment between independent parties: the PSP app (client), the remitter bank (holds the payer’s money, verifies the PIN, debits) and the beneficiary bank (credits). Money moves directly between bank accounts, so your app holds no balance and the banks stay the source of truth. The flow is a chain of API calls that can each time out, so you need a debit leg, a credit leg and a rule that a debit whose credit failed is reversed automatically. Choose it for instant settlement with no float risk; accept several network hops and dependence on bank uptime.',
       scenarios: [
-        'The service crashes right after marking a payment captured',
-        'Merchants need reliable notifications of status changes',
-        'You can’t use a distributed transaction across the DB and Kafka',
+        'Product wants to keep user balances in the app so payments feel faster',
+        'The payee’s bank fails to credit after the payer’s bank already debited',
+        'A payer should never need to type the payee’s account number and IFSC',
       ],
-      scale: 'One extra row per state change; the relay adds milliseconds to seconds of delay. Webhook retries with exponential backoff for up to ~3 days are common.',
+      scale: 'UPI runs at billions of transactions a month; the sync leg takes a few seconds because it spans two banks plus the switch. Bank downtime shows up as a lower success rate, not just slowness.',
     },
     'Status polling and reconciliation': {
       eli5: 'If the shopkeeper’s phone doesn’t ding after you pay, he doesn’t guess; he checks the bank app. And at the end of the month he matches his own register against the bank statement line by line.',
@@ -139,19 +140,20 @@ SG.add({
       };
     },
     (pick) => {
-      const pct = pick(['0.05%', '0.2%', '0.1%']);
+      const feature = pick(['“hold the user’s money in our app wallet so checkout is one tap”', '“keep a balance in our app and top it up from the bank”']);
       return {
-        q: `After capture, the payment service commits status = CAPTURED and then publishes “payment.succeeded” to Kafka for merchant webhooks. During a deploy, ${pct} of payments were captured but their events were never published, so those customers paid and never received their orders.`,
-        answer: 'Transactional outbox for webhooks',
-        hint: 'Two writes to two systems with a crash in between.',
+        q: `A product manager proposes to ${feature}. You are building a UPI-style app aiming for instant bank-to-bank transfers with the least liability for your company. Which design decision matches that goal?`,
+        answer: 'Switch-routed bank-to-bank flow (no wallet float)',
+        hint: 'Who holds the money between the tap and the credit?',
         steps: [
-          'Database commit plus Kafka publish is a dual write that can half-succeed.',
-          'Insert the event into an outbox table in the same transaction as the status change.',
-          'A CDC relay (e.g. Debezium) publishes outbox rows; webhook workers deliver with retries.',
-          'Delivery becomes at least once, so merchants deduplicate by event ID.',
+          'A wallet makes you the holder of customer money: float, licensing, your own books to defend, a bigger blast radius if you fail.',
+          'In the switch flow your app only sends an authenticated request; the payer’s bank debits after the UPI PIN and the payee’s bank credits.',
+          'The banks stay the source of truth, so your ledger records intents and outcomes, not balances you must guarantee.',
+          'The price is several hops and dependence on bank uptime, handled with pending states and status checks.',
         ],
         followups: [
-          { q: 'How does a merchant know a webhook really came from you?', options: ['Verify an HMAC signature computed with a shared secret over the payload and timestamp', 'Check the sender IP only', 'Trust any HTTPS request', 'Ask the customer'], why: 'Signed payloads plus timestamps block forgery and replays.' },
+          { q: 'How does name@bank turn into an account without the payer typing bank details?', options: ['The switch asks the payee’s PSP/bank to resolve the VPA and validate the payee before the debit', 'Your app stores every user’s account number', 'The payer enters the IFSC code', 'It is guessed from the phone number'], why: 'Resolution happens inside the network.' },
+          { q: 'The service crashes right after marking a payment captured, before the merchant webhook is sent. What prevents a lost notification?', options: ['An outbox row written in the same transaction as the status change, relayed with retries', 'Publishing to Kafka first, then writing the DB', 'A distributed transaction across DB and Kafka', 'Hoping the merchant polls'], why: 'A dual write can half-succeed; one local transaction cannot.' },
         ],
       };
     },
@@ -169,6 +171,24 @@ SG.add({
         ],
         followups: [
           { q: 'Two transfers hit the same hot account at once. How do you keep the balance correct?', options: ['Lock accounts in a fixed order (or check an optimistic version) inside the transaction', 'Let both write and fix it nightly', 'Cache the balance in Redis only', 'Use eventual consistency'], why: 'Idempotency stops duplicates of one request; it doesn’t serialise different requests on one account.' },
+        ],
+      };
+    },
+    (pick) => {
+      const amt = pick(['₹1,200', '₹7,500', '₹300']);
+      return {
+        q: `A payer sends ${amt}. The payer’s bank confirms the debit, but the payee’s bank does not answer the credit request in time. The app shows “processing” and a support engineer suggests re-sending the whole payment.`,
+        answer: 'Switch-routed bank-to-bank flow (no wallet float)',
+        hint: 'Each leg is its own call; a half-finished flow needs a defined ending.',
+        steps: [
+          'The flow is a debit leg then a credit leg; a debit without a credit leaves money in limbo.',
+          'Never re-send: the unique transaction reference already identifies this attempt.',
+          'The switch checks the credit status with the beneficiary bank; if the credit truly failed, the debit is reversed automatically (RBI expects about T+1).',
+          'Until then the transaction stays pending, and the app says so honestly.',
+        ],
+        followups: [
+          { q: 'Which identifier links the debit, the credit and any reversal?', options: ['The unique transaction reference ID issued with the request', 'The payer’s name', 'The amount', 'The device timestamp'], why: 'Names, amounts and clocks collide; a unique ID does not.' },
+          { q: 'Which NFR does this behaviour protect?', options: ['Correctness: no lost or duplicated rupee, even at the cost of a pending state', 'Lowest possible latency', 'Cheapest infrastructure', 'Maximum throughput'], why: 'For money, a pending state plus reversal beats guessing.' },
         ],
       };
     },

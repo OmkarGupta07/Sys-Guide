@@ -44,13 +44,28 @@ SG.add({
         'Replay: reset a subscriber’s offset to reprocess messages.',
         'Slow subscribers fall behind without blocking fast ones.',
       ],
-      def: 'Each Topic holds an append-only List<Message> (thread-safe, e.g. CopyOnWriteArrayList or a locked ArrayList). Each Subscriber has its own AtomicInteger offset and a worker that reads from offset, processes, and advances. Publishing appends and signals waiting workers. This decouples subscribers and allows replay, unlike push-only Observer.',
+      def: 'Each Topic holds an append-only List<Message> (thread-safe, e.g. CopyOnWriteArrayList or a locked ArrayList) and never hands out its mutable list: getters return an unmodifiable view. Each Subscriber has its own AtomicInteger offset (wrapped with it in a TopicSubscriber). Publishing appends first, then wakes the workers. Subscribers sit behind an ISubscriber interface (id, consume(message)), so any consumer can plug in. This decouples subscribers and allows replay, unlike push-only Observer.',
       scenarios: [
         'Multiple independent subscribers per topic',
         'A subscriber must be able to replay from an earlier point',
         'One slow subscriber must not slow the others',
       ],
       scale: 'Memory grows with retained messages; add retention (drop below the minimum offset) for long runs.',
+    },
+    'Per-subscriber worker with compare-and-set offset': {
+      eli5: 'Each student has their own helper who reads the notebook aloud to them. If the helper is told to go back to page 2 while reading page 5, he must not carry on to page 6 as if nothing happened.',
+      industry: [
+        'One worker thread per (topic, subscriber), created lazily on first message and parked with wait() when caught up.',
+        'Within one subscriber messages are processed in order; across subscribers the same message runs in parallel.',
+        'Kafka consumer offset seek/reset has the same hazard: a rewind must beat an in-flight commit.',
+      ],
+      def: 'The worker loops: if offset >= topic size, wait(); else read messages[offset], call consume(), then advance with offset.compareAndSet(old, old + 1). If an admin reset the offset to 2 while the worker was busy with message 5, the CAS fails and the rewind wins; a plain increment would overwrite it with 6 (or 3 after a stale read) and lose the replay. publish() appends to the topic, then notifies the subscriber workers so idle ones wake. Prefer an ExecutorService or a fixed pool over spawning a fresh thread per publish.',
+      scenarios: [
+        'Offset can be reset by another thread while a worker is consuming',
+        'Each subscriber must see messages in order, but subscribers run in parallel',
+        'Idle workers must not spin and must wake when a message is published',
+      ],
+      scale: 'One thread per active subscriber-topic pair, so thousands of subscribers need a pooled or event-driven worker model; CAS has no lock and does not block the reset.',
     },
     'Delay-ordered scheduler': {
       eli5: 'An alarm clock list sorted by time: the person at the top of the list is woken first; everyone else waits.',
@@ -120,6 +135,20 @@ SG.add({
         followups: [
           { q: 'How does a subscriber worker wait for new messages without busy-spinning?', options: ['wait/notifyAll on the topic (or a Condition) signalled by publish', 'while(true) with no sleep', 'Thread.sleep(1) in a loop forever', 'System.gc()'], why: 'Condition signalling wakes workers only when there is data.' },
           { q: 'Why AtomicInteger for each offset?', options: ['It may be read by monitors and reset by an admin thread while the worker advances it', 'int cannot hold offsets', 'It makes the list thread-safe', 'It sorts messages'], why: 'Visibility and atomic updates across threads.' },
+        ],
+      };
+    },
+    (pick) => {
+      const at = pick([5, 8, 12]);
+      return {
+        q: `In your pub-sub queue a worker thread is consuming message ${at} for subscriber billing and does offset.incrementAndGet() afterwards. Meanwhile an admin resets billing’s offset to 2 to replay. After the reset, the worker keeps going from ${at + 1} and the replay never happens.`,
+        answer: 'Per-subscriber worker with compare-and-set offset',
+        hint: 'The worker’s “advance by one” must only apply if nobody changed the offset meanwhile.',
+        steps: ['Read the current offset, consume messages[current].', 'Advance with offset.compareAndSet(current, current + 1), not a blind increment.', 'If a reset happened, CAS fails, the loop re-reads the new offset (2) and replays from there.', 'When offset >= size the worker wait()s; publish() appends and notifies.'],
+        followups: [
+          { q: 'Within one subscriber, can two messages be consumed at the same time in this design?', options: ['No; one worker per subscriber processes messages in order, while different subscribers run in parallel', 'Yes, every message gets its own thread', 'Only on reset', 'Only for the first subscriber'], why: 'Ordering per subscriber is the point of one worker per (topic, subscriber); parallelism is across subscribers.' },
+          { q: 'publish() starts a new Thread every time to fan out. What is the better approach?', options: ['Submit to an ExecutorService, or keep long-lived workers and just notify them', 'Keep creating threads; they are free', 'Do the fan-out under a global lock', 'Use Thread.sleep to throttle'], why: 'Unbounded thread creation costs memory and scheduling; pools or parked workers reuse threads.' },
+          { q: 'Why add the message to the topic before waking the workers?', options: ['A woken worker must be able to see the message when it checks offset against size', 'Order does not matter', 'Messages must be sorted first', 'notify only works after add'], why: 'Otherwise the worker may re-check, find nothing and sleep again, missing the message.' },
         ],
       };
     },

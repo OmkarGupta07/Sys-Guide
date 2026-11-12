@@ -5,7 +5,7 @@ SG.add({
   title: 'Sessions, JWT, OAuth2 and access control',
   short: 'Auth',
   blurb: 'Who are you (authentication), what may you do (authorization), and how the proof travels with each request.',
-  intro: 'Authentication proves identity; authorization decides permissions. The proof travels as a session ID (server looks it up) or a signed token (server verifies it). OAuth2 lets one app act on your behalf in another without your password; OpenID Connect adds “who logged in” on top. Access rules are usually roles (RBAC) or attributes (ABAC).',
+  intro: 'Authentication proves identity; authorization decides permissions. The proof travels as a session ID (server looks it up: easy to revoke, needs a shared store) or a signed token (server only verifies a signature: stateless, hard to revoke, so pair it with a short expiry and a refresh token). OAuth2 lets one app act on your behalf in another without your password; OpenID Connect adds “who logged in” on top. Access rules are usually roles (RBAC) or attributes (ABAC).',
   options: {
     'Session cookie': {
       eli5: 'A cloakroom token. The token itself means nothing; the counter looks it up to find your coat.',
@@ -18,9 +18,10 @@ SG.add({
       scenarios: [
         'Browser-based web apps on your own domain',
         'You need instant revocation (logout, ban, password change)',
-        'Sensitive apps where tokens shouldn’t live long on the client',
+        'Sensitive apps where data should stay on the server, not in the client',
+        'You already run Redis or a central database anyway',
       ],
-      scale: 'A Redis lookup per request is cheap; the store must be highly available. Protect against CSRF (SameSite cookies, tokens).',
+      scale: 'A Redis lookup per request adds ~1 ms and a network hop; the store must be highly available or every server fails together. Protect against CSRF (SameSite cookies, tokens).',
     },
     'JWT access token': {
       eli5: 'A signed visitor badge with your name, role and expiry printed on it. Any guard can check the signature without calling the front desk, but a badge can’t be “un-printed” until it expires.',
@@ -29,13 +30,29 @@ SG.add({
         'Microservices trusting a token issued by one auth service.',
         'Short-lived access tokens (5–15 min) plus refresh tokens.',
       ],
-      def: 'A JSON Web Token carries claims (user ID, roles, expiry) plus a signature. Any service with the key can verify it locally, with no lookup: stateless and fast. Hard to revoke before expiry, so keep access tokens short-lived and use refresh tokens (or a denylist) for logout.',
+      def: 'A JSON Web Token carries claims (user ID, roles, expiry) plus a signature. Any service with the key can verify it locally, with no lookup: stateless and fast. HMAC (shared secret) is fine when every verifier is trusted; RSA/ECDSA (private key signs, public key verifies) suits microservices and third parties, since verifiers never hold a signing key. Hard to revoke before expiry, so keep it short-lived.',
       scenarios: [
         'Many services/gateways must verify identity without a central lookup',
         'Mobile apps and third-party API clients',
         'Stateless horizontal scaling',
+        'Services owned by other teams or vendors verifying with only a public key',
       ],
       scale: 'Don’t put secrets in the payload (it’s only encoded, not encrypted). Long-lived JWTs are a security risk.',
+    },
+    'Refresh token + short access token': {
+      eli5: 'A day pass that expires in 15 minutes, plus a membership card kept in the office safe. When the pass expires, you show the card at one desk to get a new pass, and the desk can cancel the card.',
+      industry: [
+        'Mobile banking and e-commerce apps that keep you logged in for weeks.',
+        'SPAs calling APIs with a 5–15 minute access token.',
+        'Auth servers (Keycloak, Auth0, Cognito) issuing rotating refresh tokens.',
+      ],
+      def: 'The access token (a JWT) lives about 15 minutes and goes on every request. The refresh token lives days or weeks, is sent only to the token endpoint, and is stored server-side so it can be revoked. When the access token expires the client silently swaps the refresh token for a new one. A stolen access token is useful for minutes; a stolen refresh token can be cut off.',
+      scenarios: [
+        'Stateless JWTs but users must stay logged in for 30 days',
+        'You want revocation without a lookup on every request',
+        'Limiting damage from a leaked access token',
+      ],
+      scale: 'The refresh endpoint is the only stateful, hot-path-free check, so it sees a tiny fraction of traffic. Rotate refresh tokens on use and detect reuse.',
     },
     'OAuth2 / OpenID Connect': {
       eli5: 'Giving a valet a special car key that only drives the car, can’t open the boot, and stops working tomorrow, instead of handing over your house keys.',
@@ -77,6 +94,7 @@ SG.add({
         hint: 'Which mechanism can be revoked instantly?',
         steps: ['Instant revocation is required.', 'A session record can simply be deleted.', 'Use an HttpOnly, Secure, SameSite session cookie with sessions in Redis.', 'Session cookie.'],
         followups: [
+          { q: 'Sessions are in memory of each of 6 app servers behind a load balancer and users keep getting logged out. Fix?', options: ['Move sessions to a shared store like Redis (or use sticky sessions as a stopgap)', 'Switch to HTTP/2', 'Lengthen the cookie name', 'Disable the load balancer'], why: 'Any server must be able to look up any session.' },
           { q: 'Why mark the cookie HttpOnly?', options: ['JavaScript can’t read it, so an XSS bug can’t steal the session', 'It makes requests faster', 'It enables HTTP/2', 'It encrypts the database'], why: 'HttpOnly limits the damage of XSS.' },
         ],
       };
@@ -115,6 +133,32 @@ SG.add({
         steps: ['Pure roles explode into special cases.', 'Rules depend on ownership, tenant and assignment attributes.', 'Use attribute-based checks (often on top of a few roles), enforced on the server.', 'ABAC (with RBAC).'],
         followups: [
           { q: 'The frontend hides the “Delete” button for viewers. Is that enough?', options: ['No: the server must check permissions on every request; hidden buttons are not security', 'Yes', 'Only on mobile', 'Yes, if the code is minified'], why: 'Authorization must be enforced server-side.' },
+        ],
+      };
+    },
+    (pick) => {
+      const days = pick([14, 30, 90]);
+      return {
+        q: `A mobile shopping app uses stateless JWTs, and users must stay logged in for ${days} days. Security says a stolen access token must be useless within 15 minutes, and a lost phone must be cut off without a lookup on every API call.`,
+        answer: 'Refresh token + short access token',
+        hint: 'Split the token into a short-lived one used everywhere and a long-lived one used rarely.',
+        steps: ['A single long-lived JWT is a big theft window and cannot be revoked.', 'Issue a 15-minute access token for API calls.', `Issue a ${days}-day refresh token, stored server-side and sent only to the token endpoint.`, 'Revoking the refresh token ends access within 15 minutes.'],
+        followups: [
+          { q: 'How often is the refresh token sent?', options: ['Only to the token endpoint when the access token has expired', 'On every API request', 'Inside every JWT', 'Never, it stays on the server'], why: 'Keeping it off normal requests shrinks its exposure.' },
+          { q: 'How do you cut off a user instantly with this design?', options: ['Revoke the refresh token; accept up to one access-token lifetime of lag (or add a small denylist)', 'Wait for the refresh token to expire', 'Change the JWT algorithm', 'Nothing can be done'], why: 'The access token cannot be recalled, so its short lifetime bounds the delay.' },
+        ],
+      };
+    },
+    (pick) => {
+      const n = pick([12, 30, 60]);
+      return {
+        q: `Your auth service signs JWTs. ${n} services, some run by partner teams you don’t fully trust, must verify tokens. Security refuses to hand the signing secret to partners.`,
+        answer: 'JWT access token',
+        hint: 'Can verifiers be given something that cannot sign?',
+        steps: ['A shared HMAC secret would let any verifier forge tokens.', 'Sign with a private key (RSA/ECDSA) kept only by the auth service.', 'Publish the public key (e.g. a JWKS endpoint) so any service verifies locally.', 'JWT with asymmetric signing.'],
+        followups: [
+          { q: 'When is HMAC (HS256) acceptable?', options: ['A monolith or a few fully trusted services sharing one secret', 'Whenever third parties verify', 'Never', 'Only for refresh tokens'], why: 'Symmetric is simpler and faster but every verifier can also sign.' },
+          { q: 'Why can’t you just put the user’s phone number in the payload “because it’s signed”?', options: ['Signing gives integrity, not secrecy: the payload is only Base64-encoded and readable', 'Signed payloads are encrypted', 'Phone numbers are too long', 'The signature would break'], why: 'Use JWE or keep sensitive data server-side.' },
         ],
       };
     },

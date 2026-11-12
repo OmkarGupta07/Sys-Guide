@@ -22,20 +22,35 @@ SG.add({
       ],
       scale: 'O(1) per move via HashMap; a 100-square board with 20 jumps is trivial memory.',
     },
-    'O(1) win-check counters': {
-      eli5: 'Instead of rereading the whole tic-tac-toe grid after every move, keep a tally for each row, column and diagonal. When any tally hits 3, someone has won.',
+    'Incremental win check from the last move': {
+      eli5: 'Only the line through the disc you just dropped can newly become a winner, so you look outward from that one spot instead of re-reading the whole grid.',
       industry: [
-        'Tic-tac-toe on n×n boards (and Connect Four variants) in interviews.',
-        'rows[n], cols[n], diag, antiDiag: +1 for player X, −1 for O.',
-        'Same idea as maintaining aggregates incrementally instead of recomputing.',
+        'Connect Four: after a drop at (row, col), count same-coloured discs both ways along 4 directions (horizontal, vertical, two diagonals); 4 or more wins.',
+        'Tic-tac-toe on n×n: rows[n], cols[n], diag, antiDiag counters with +1 for X and −1 for O; a counter hitting ±n wins in O(1).',
+        'Gomoku (5 in a row on 15×15) uses the same outward walk from the last move.',
       ],
-      def: 'Keep int[] rows, int[] cols and two diagonal counters. On a move at (r, c), add +1 or −1 for the player; if any affected counter’s absolute value equals n, that player wins. This makes win checking O(1) per move instead of O(n²). Put it behind a WinningStrategy interface so variants (k-in-a-row, Connect Four) can swap in.',
+      def: 'A win can only involve the cell that was just played, so check from there. For k-in-a-row games (Connect Four, Gomoku), walk from the last move in 4 directions, count same-coloured cells on both sides plus the disc itself, and win at k: O(k) per move. For classic n×n tic-tac-toe, per-row/column/diagonal counters give O(1). Have place-disc return the row it landed in so the win check knows where to start. Use a Strategy for win rules only when variants really exist; four fixed directions do not need four checker classes.',
       scenarios: [
-        'Board size n is large (n = 100) and moves are frequent',
-        'Win rules may change between game variants',
+        'Board is large and moves are frequent',
+        'Connect Four: you must find four in a row on a 6×7 grid',
         'Interviewer asks the complexity of checking a winner',
       ],
-      scale: 'O(n) memory, O(1) per move; brute force is O(n²) per move.',
+      scale: 'O(k) per move (O(1) with counters) versus O(rows × cols) for a full scan.',
+    },
+    'Game referee, Board grid, state enum': {
+      eli5: 'The board is the physical plastic grid; it only knows where discs sit. The referee knows whose turn it is and who won.',
+      industry: [
+        'Connect Four: Board owns grid, canPlace, placeDisc and checkWin; Game owns players, current player and game state.',
+        'GameState enum {IN_PROGRESS, WON, DRAW} instead of isOver, hasWinner and isDraw booleans, which allow 8 combinations when only 3 are valid.',
+        'Board stores a DiscColor enum, not Player objects, so it stays testable without players.',
+      ],
+      def: 'Give each class one job (SRP): Board handles grid physics and bounds/full-column checks; Game handles turn order, state and winner and calls makeMove(player, column), which rejects moves out of turn, after game over, or into a full column cleanly. Model status as one enum, not several booleans. Return a result code or enum rather than a bare boolean if callers need the reason. Keep the UI out of scope.',
+      scenarios: [
+        'Board size or win length changes in future',
+        'Add undo or a bot without rewriting the board',
+        'Status flags are drifting out of sync',
+      ],
+      scale: 'Undo is a stack of Move(player, row, col) in Game; a bot is a separate chooseMove(board) class and Game and Board are untouched.',
     },
     'Factory + polymorphic piece moves': {
       eli5: 'Every chess piece knows its own way of moving. You do not ask the board “how does a knight move?”; you ask the knight.',
@@ -101,11 +116,11 @@ SG.add({
       const n = pick([3, 10, 100]);
       return {
         q: `Tic-tac-toe on an ${n}×${n} board. After each move, checkWinner() scans every row, column and both diagonals. The interviewer asks you to make it faster per move.`,
-        answer: 'O(1) win-check counters',
+        answer: 'Incremental win check from the last move',
         hint: 'Only the row, column and diagonals of the last move can change.',
         steps: ['Scanning is O(n²) per move.', 'Keep rows[n], cols[n], diag, antiDiag counters.', 'Add +1 for X, −1 for O at (r, c); update diag if r == c, anti if r + c == n − 1.', 'Win when any updated counter reaches ±n: O(1).'],
         followups: [
-          { q: 'Variant: win with k = 5 in a row on a 15×15 board (Gomoku). Do the counters still work?', options: ['No; check from the last move outward in 4 directions, O(k), behind a WinningStrategy', 'Yes, unchanged', 'Only if k divides n', 'Only on square boards'], why: 'Full-line counters only detect n in a row; strategy makes the rule swappable.' },
+          { q: 'Variant: win with k = 5 in a row on a 15×15 board (Gomoku). Do the counters still work?', options: ['No; walk outward from the last move in 4 directions, O(k); add a WinningStrategy only if several rule sets must coexist', 'Yes, unchanged', 'Only if k divides n', 'Only on square boards'], why: 'Full-line counters only detect n in a row; the outward walk handles any k.' },
         ],
       };
     },
@@ -148,14 +163,29 @@ SG.add({
       };
     },
     (pick) => {
-      const v = pick(['Connect Four', 'a 4×4 tic-tac-toe where 4 in a row wins', 'tic-tac-toe with a 3-player variant']);
+      const r = pick([6, 8]);
+      const c = pick([7, 9]);
       return {
-        q: `The same game engine must support classic tic-tac-toe and ${v}. The interviewer asks how you keep the win rule pluggable while staying fast.`,
-        answer: 'O(1) win-check counters',
-        hint: 'Separate “how do I check a win” from the game loop, and keep it incremental.',
-        steps: ['Win rules vary between variants.', 'Define WinningStrategy.isWin(board, lastMove).', 'Classic: row/col/diagonal counters, O(1) per move.', 'Variants plug in their own incremental check from the last move.'],
+        q: `Connect Four on a ${r}×${c} grid: after each drop, the candidate rescans every row, column and diagonal of the whole board for four in a row. The interviewer says: “discs only ever change at one cell per move.”`,
+        answer: 'Incremental win check from the last move',
+        hint: 'What is the only cell that can have just created a new line?',
+        steps: ['A full scan is O(rows × cols) per move and checks lines nothing touched.', 'Make placeDisc return the row the disc landed in.', 'From (row, col) walk both ways along horizontal, vertical, diagonal and anti-diagonal and count matching colours (disc itself counts once).', 'Win when any direction totals 4 or more: O(4) work per move.'],
         followups: [
-          { q: 'Why check only from the last move?', options: ['Only lines through the last move can have changed', 'It is required by Java', 'Older moves are erased', 'To save memory only'], why: 'Incremental checks avoid rescanning unchanged lines.' },
+          { q: 'Why does the walk in each direction need to go both ways from the new disc?', options: ['The new disc can be in the middle of the four, not only at an end', 'Java loops must run twice', 'To handle draws', 'Because the board wraps around'], why: 'Count right plus left (and up plus down, and both diagonals) plus 1 for the disc itself.' },
+          { q: 'Should you add four WinChecker classes (Horizontal, Vertical, ...) behind a Strategy interface?', options: ['Not unless win rules truly vary; four fixed directions are about 10 lines of loop', 'Always, to show design patterns', 'Yes, because Java needs interfaces for loops', 'Only for the vertical case'], why: 'Patterns that add classes without a real axis of change are over-engineering; mention the option and explain why you skip it.' },
+        ],
+      };
+    },
+    (pick) => {
+      const f = pick(['an undo button', 'a computer opponent', 'a 10×10 board']);
+      return {
+        q: `A Connect Four design has one class holding the grid, the current player, three booleans (isOver, hasWinner, isDraw) and the UI printing. The product owner now wants ${f}, and a bug set isOver=true with hasWinner=false and isDraw=true.`,
+        answer: 'Game referee, Board grid, state enum',
+        hint: 'Which class would you point to for each change, and can an impossible state even be represented?',
+        steps: ['Three booleans give 8 states but only 3 are valid; use one GameState enum.', 'Board owns the grid and its rules (bounds, full column, win check); Game owns turn, state and winner.', 'Board stores a DiscColor, not Player, so it needs no knowledge of who is playing.', 'Each new feature then touches one class: undo is a move stack in Game, a bot only chooses a column, board size is a constructor argument.'],
+        followups: [
+          { q: 'How do you add undo?', options: ['Game keeps a stack of Move(player, row, col); undo pops, clears that cell on Board and restores current player and state', 'Copy the whole board after every move into a list and swap it back', 'Make Board store the history of players', 'Reject undo as out of scope for every game'], why: 'All moves flow through Game.makeMove, so it is the single place to record history.' },
+          { q: 'Bot opponent: what changes?', options: ['Add a small bot class with chooseMove(board) and let the driver loop call it; Game and Board stay the same', 'Rewrite Board with an AI method', 'Make Disc an interface', 'Copy Game into BotGame'], why: 'Choosing a move is outside the rules of the game, so keep it out of Game and Board.' },
         ],
       };
     },
